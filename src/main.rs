@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand};
+use colored::Colorize;
 
 /// Bit flag with a human-readable name.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -275,21 +276,41 @@ fn value_to_checked_flags(flag_value: u16) -> Vec<bool> {
 fn print_explanation(flag_value: u16) {
     let (summary, bad_flags) = explain_flags(flag_value);
 
-    println!("Flag value: {flag_value} (0x{flag_value:03x})");
+    println!(
+        "{} {} {}",
+        "Flag value:".bold(),
+        flag_value.to_string().bright_cyan(),
+        format!("(0x{:03x})", flag_value).bright_black()
+    );
     if summary.is_empty() {
-        println!("No flags are set.");
+        println!("{}", "No flags are set.".dimmed());
     } else {
-        println!("Set flags:");
+        println!("{}", "Set flags:".bold());
         for f in &summary {
-            println!("  - {:>3} (0x{:03x}): {}", f.bitmask, f.bitmask, f.name);
+            println!(
+                "  - {} {}: {}",
+                format!("{:>3}", f.bitmask).bright_cyan(),
+                format!("(0x{:03x})", f.bitmask).bright_black(),
+                f.name
+            );
         }
     }
 
     if !bad_flags.is_empty() {
         println!();
-        println!("Warning: the following flags are invalid when the read is not paired:");
+        println!(
+            "{}",
+            "Warning: the following flags are invalid when the read is not paired:"
+                .bright_yellow()
+                .bold()
+        );
         for f in &bad_flags {
-            println!("  - {:>3} (0x{:03x}): {}", f.bitmask, f.bitmask, f.name);
+            println!(
+                "  - {} {}: {}",
+                format!("{:>3}", f.bitmask).bright_red(),
+                format!("(0x{:03x})", f.bitmask).bright_black(),
+                f.name.bright_red()
+            );
         }
     }
 }
@@ -302,7 +323,7 @@ fn main() {
         (Some(flag), None) => match parse_flag_value(&flag) {
             Ok(value) => print_explanation(value),
             Err(err) => {
-                eprintln!("{err}");
+                eprintln!("{}", err.bright_red());
                 std::process::exit(1);
             }
         },
@@ -311,7 +332,7 @@ fn main() {
         (None, Some(Command::Explain { flag })) => match parse_flag_value(&flag) {
             Ok(value) => print_explanation(value),
             Err(err) => {
-                eprintln!("{err}");
+                eprintln!("{}", err.bright_red());
                 std::process::exit(1);
             }
         },
@@ -327,43 +348,70 @@ fn main() {
                 let checked = value_to_checked_flags(flag_value);
                 let (_swapped, value, summary, bad_flags) = switch_mate_flags(checked);
 
-                println!("After switching mate-related flags:");
-                println!("Flag value: {value} (0x{value:03x})");
+                println!(
+                    "{}",
+                    "After switching mate-related flags:".bold().bright_blue()
+                );
+                println!(
+                    "{} {} {}",
+                    "Flag value:".bold(),
+                    value.to_string().bright_cyan(),
+                    format!("(0x{:03x})", value).bright_black()
+                );
 
                 if summary.is_empty() {
-                    println!("No flags are set.");
+                    println!("{}", "No flags are set.".dimmed());
                 } else {
-                    println!("Set flags:");
+                    println!("{}", "Set flags:".bold());
                     for f in &summary {
-                        println!("  - {:>3} (0x{:03x}): {}", f.bitmask, f.bitmask, f.name);
+                        println!(
+                            "  - {} {}: {}",
+                            format!("{:>3}", f.bitmask).bright_cyan(),
+                            format!("(0x{:03x})", f.bitmask).bright_black(),
+                            f.name
+                        );
                     }
                 }
 
                 if !bad_flags.is_empty() {
                     println!();
                     println!(
+                        "{}",
                         "Warning: the following flags are invalid when the read is not paired:"
+                            .bright_yellow()
+                            .bold()
                     );
                     for f in &bad_flags {
-                        println!("  - {:>3} (0x{:03x}): {}", f.bitmask, f.bitmask, f.name);
+                        println!(
+                            "  - {} {}: {}",
+                            format!("{:>3}", f.bitmask).bright_red(),
+                            format!("(0x{:03x})", f.bitmask).bright_black(),
+                            f.name.bright_red()
+                        );
                     }
                 }
             }
             Err(err) => {
-                eprintln!("{err}");
+                eprintln!("{}", err.bright_red());
                 std::process::exit(1);
             }
         },
 
         // No args at all: print a short usage hint.
         (None, None) => {
-            eprintln!("Usage: flagsamurai <FLAG> | flagsamurai <SUBCOMMAND> [FLAGS...]");
+            eprintln!(
+                "{}",
+                "Usage: flagsamurai <FLAG> | flagsamurai <SUBCOMMAND> [FLAGS...]".bright_yellow()
+            );
             std::process::exit(1);
         }
 
         // Both top-level flag and subcommand present: treat as misuse.
         (Some(_), Some(_)) => {
-            eprintln!("Provide either a FLAG value or a subcommand, not both.");
+            eprintln!(
+                "{}",
+                "Provide either a FLAG value or a subcommand, not both.".bright_red()
+            );
             std::process::exit(1);
         }
     }
