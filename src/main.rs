@@ -156,6 +156,10 @@ fn switch_mate_flags(
     subcommand_precedence_over_arg = true
 )]
 struct Cli {
+    /// Show information for both reads (original and mate-swapped).
+    #[arg(short, long)]
+    full: bool,
+
     /// Numeric flag value to explain (decimal or hex like 0x93).
     ///
     /// If provided without a subcommand, this is handled like the `explain` command.
@@ -273,7 +277,8 @@ fn value_to_checked_flags(flag_value: u16) -> Vec<bool> {
         .collect()
 }
 
-fn print_explanation(flag_value: u16) {
+/// Print explanation for a single read (no mate-swapping), with color.
+fn print_single_read_explanation(flag_value: u16) {
     let (summary, bad_flags) = explain_flags(flag_value);
 
     println!(
@@ -315,13 +320,42 @@ fn print_explanation(flag_value: u16) {
     }
 }
 
+/// Print explanation, optionally for both reads when `full` is true.
+fn print_explanation(flag_value: u16, full: bool) {
+    if !full {
+        print_single_read_explanation(flag_value);
+        return;
+    }
+
+    println!(
+        "{} {} {}",
+        "Description of".bold().bright_blue(),
+        "first".bold().bright_green(),
+        "read".bold().bright_blue()
+    );
+    print_single_read_explanation(flag_value);
+    println!();
+
+    // Second read: flip read/mate-related bits and recompute.
+    let checked = value_to_checked_flags(flag_value);
+    let (_swapped, mate_value, _summary, _bad_flags) = switch_mate_flags(checked);
+
+    println!(
+        "{} {} {}",
+        "Description of".bold().bright_blue(),
+        "second".bold().bright_green(),
+        "read".bold().bright_blue()
+    );
+    print_single_read_explanation(mate_value);
+}
+
 fn main() {
     let cli = Cli::parse();
 
     match (cli.flag, cli.command) {
         // Default behavior: just a number ⇒ explain
         (Some(flag), None) => match parse_flag_value(&flag) {
-            Ok(value) => print_explanation(value),
+            Ok(value) => print_explanation(value, cli.full),
             Err(err) => {
                 eprintln!("{}", err.bright_red());
                 std::process::exit(1);
@@ -330,7 +364,7 @@ fn main() {
 
         // Explicit `explain` subcommand
         (None, Some(Command::Explain { flag })) => match parse_flag_value(&flag) {
-            Ok(value) => print_explanation(value),
+            Ok(value) => print_explanation(value, cli.full),
             Err(err) => {
                 eprintln!("{}", err.bright_red());
                 std::process::exit(1);
@@ -341,7 +375,7 @@ fn main() {
         (None, Some(Command::Compute(selection))) => {
             let checked = selection.to_vec();
             let value = compute_flag_value(&checked);
-            print_explanation(value);
+            print_explanation(value, cli.full);
         }
         (None, Some(Command::Switch { flag })) => match parse_flag_value(&flag) {
             Ok(flag_value) => {
