@@ -221,6 +221,16 @@ enum Command {
         #[arg(short, long)]
         full: bool,
     },
+    /// Show common SAM flag combinations and their meanings.
+    Common {
+        /// Also show the hex bitmask alongside each decimal value.
+        ///
+        /// This is equivalent to using the top-level `--full` flag. Using
+        /// `--full` either before or after `common` (or both) has the same
+        /// effect.
+        #[arg(short, long)]
+        full: bool,
+    },
 }
 
 /// Selection of individual flags via booleans.
@@ -390,6 +400,65 @@ fn print_explanation(flag_value: u16, full: bool) {
         "read".bold().bright_blue()
     );
     print_single_read_explanation(mate_value);
+}
+
+/// Print a nicely formatted, colorized summary of common SAM flag combinations.
+///
+/// When `with_bitmasks` is true, also show the hex bitmask alongside each
+/// decimal value.
+fn print_common_flags(with_bitmasks: bool) {
+    // Helper to print a section header and a list of codes.
+    fn print_section(title: &str, codes: &[u16], with_bitmasks: bool) {
+        println!("{}", title.bold().bright_blue());
+        println!(
+            "  {}",
+            codes
+                .iter()
+                .map(|c| {
+                    if with_bitmasks {
+                        format!(
+                            "{} {}",
+                            c.to_string().bright_cyan(),
+                            format!("(0x{:03x})", c).bright_black()
+                        )
+                    } else {
+                        c.to_string().bright_cyan().to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        println!();
+    }
+
+    println!("{}", "Common flags*".bold().underline().bright_magenta());
+    println!();
+
+    print_section(
+        "One of the reads is unmapped:",
+        &[73, 133, 89, 121, 165, 181, 101, 117, 153, 185, 69, 137],
+        with_bitmasks,
+    );
+
+    print_section("Both reads are unmapped:", &[77, 141], with_bitmasks);
+
+    print_section(
+        "Mapped within the insert size and in correct orientation:",
+        &[99, 147, 83, 163],
+        with_bitmasks,
+    );
+
+    print_section(
+        "Mapped within the insert size but in wrong orientation:",
+        &[67, 131, 115, 179],
+        with_bitmasks,
+    );
+
+    print_section(
+        "Mapped uniquely, but with wrong insert size:",
+        &[81, 161, 97, 145, 65, 129, 113, 177],
+        with_bitmasks,
+    );
 }
 
 /// Simple interactive checklist UI for selecting flags.
@@ -630,6 +699,13 @@ fn main() {
                 eprintln!("{}", format!("Interactive mode failed: {err}").bright_red());
                 std::process::exit(1);
             }
+        }
+        (None, Some(Command::Common { full: common_full })) => {
+            // Honor both top-level and subcommand-level `--full` for this
+            // listing: when set in either place, also show the bitmask
+            // alongside the decimal value.
+            let effective_full = cli.full || common_full;
+            print_common_flags(effective_full);
         }
 
         // No args at all: print a short usage hint.
