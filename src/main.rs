@@ -148,11 +148,20 @@ fn switch_mate_flags(
 #[command(
     name = "flagsamurai",
     version,
-    about = "Inspect and manipulate SAM-style bit flags"
+    about = "Inspect and manipulate SAM-style bit flags",
+    // Prefer subcommand names like `switch` over treating them as a bare flag
+    // value. This lets `flagsamurai switch 99` be parsed as a subcommand call
+    // instead of interpreting `switch` as the numeric argument.
+    subcommand_precedence_over_arg = true
 )]
 struct Cli {
+    /// Numeric flag value to explain (decimal or hex like 0x93).
+    ///
+    /// If provided without a subcommand, this is handled like the `explain` command.
+    flag: Option<String>,
+
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -165,7 +174,14 @@ enum Command {
     /// Compute a numeric flag value from individual boolean flags.
     Compute(FlagSelection),
     /// Swap mate-related flags and show the resulting value and explanation.
-    Switch(FlagSelection),
+    ///
+    /// This takes an existing numeric flag value, flips the read/mate-related
+    /// bits (unmapped, reverse, first/second in pair), and reports the new
+    /// value and its explanation.
+    Switch {
+        /// Numeric flag value (decimal, hex like 0x93 is also accepted).
+        flag: String,
+    },
 }
 
 /// Selection of individual flags via booleans.
@@ -247,6 +263,15 @@ fn parse_flag_value(input: &str) -> Result<u16, String> {
     }
 }
 
+/// Convert a numeric flag value into the boolean vector used by
+/// `switch_mate_flags`, aligned with the `FLAGS` table.
+fn value_to_checked_flags(flag_value: u16) -> Vec<bool> {
+    FLAGS
+        .iter()
+        .map(|flag| (flag_value & flag.bitmask) != 0)
+        .collect()
+}
+
 fn print_explanation(flag_value: u16) {
     let (summary, bad_flags) = explain_flags(flag_value);
 
@@ -272,42 +297,74 @@ fn print_explanation(flag_value: u16) {
 fn main() {
     let cli = Cli::parse();
 
-    match cli.command {
-        Command::Explain { flag } => match parse_flag_value(&flag) {
+    match (cli.flag, cli.command) {
+        // Default behavior: just a number ⇒ explain
+        (Some(flag), None) => match parse_flag_value(&flag) {
             Ok(value) => print_explanation(value),
             Err(err) => {
                 eprintln!("{err}");
                 std::process::exit(1);
             }
         },
-        Command::Compute(selection) => {
+
+        // Explicit `explain` subcommand
+        (None, Some(Command::Explain { flag })) => match parse_flag_value(&flag) {
+            Ok(value) => print_explanation(value),
+            Err(err) => {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        },
+
+        // Other subcommands
+        (None, Some(Command::Compute(selection))) => {
             let checked = selection.to_vec();
             let value = compute_flag_value(&checked);
             print_explanation(value);
         }
-        Command::Switch(selection) => {
-            let checked = selection.to_vec();
-            let (_swapped, value, summary, bad_flags) = switch_mate_flags(checked);
+        (None, Some(Command::Switch { flag })) => match parse_flag_value(&flag) {
+            Ok(flag_value) => {
+                let checked = value_to_checked_flags(flag_value);
+                let (_swapped, value, summary, bad_flags) = switch_mate_flags(checked);
 
-            println!("After switching mate-related flags:");
-            println!("Flag value: {value} (0x{value:03x})");
+                println!("After switching mate-related flags:");
+                println!("Flag value: {value} (0x{value:03x})");
 
-            if summary.is_empty() {
-                println!("No flags are set.");
-            } else {
-                println!("Set flags:");
-                for f in &summary {
-                    println!("  - {:>3} (0x{:03x}): {}", f.bitmask, f.bitmask, f.name);
+                if summary.is_empty() {
+                    println!("No flags are set.");
+                } else {
+                    println!("Set flags:");
+                    for f in &summary {
+                        println!("  - {:>3} (0x{:03x}): {}", f.bitmask, f.bitmask, f.name);
+                    }
+                }
+
+                if !bad_flags.is_empty() {
+                    println!();
+                    println!(
+                        "Warning: the following flags are invalid when the read is not paired:"
+                    );
+                    for f in &bad_flags {
+                        println!("  - {:>3} (0x{:03x}): {}", f.bitmask, f.bitmask, f.name);
+                    }
                 }
             }
-
-            if !bad_flags.is_empty() {
-                println!();
-                println!("Warning: the following flags are invalid when the read is not paired:");
-                for f in &bad_flags {
-                    println!("  - {:>3} (0x{:03x}): {}", f.bitmask, f.bitmask, f.name);
-                }
+            Err(err) => {
+                eprintln!("{err}");
+                std::process::exit(1);
             }
+        },
+
+        // No args at all: print a short usage hint.
+        (None, None) => {
+            eprintln!("Usage: flagsamurai <FLAG> | flagsamurai <SUBCOMMAND> [FLAGS...]");
+            std::process::exit(1);
+        }
+
+        // Both top-level flag and subcommand present: treat as misuse.
+        (Some(_), Some(_)) => {
+            eprintln!("Provide either a FLAG value or a subcommand, not both.");
+            std::process::exit(1);
         }
     }
 }
