@@ -212,7 +212,15 @@ enum Command {
         flag: String,
     },
     /// Interactive terminal UI for selecting flags via a checklist.
-    Interactive,
+    Select {
+        /// Show information for both reads (original and mate-swapped).
+        ///
+        /// This is equivalent to using the top-level `--full` flag.
+        /// Using `--full` either before or after
+        /// `select` (or both) has the same effect.
+        #[arg(short, long)]
+        full: bool,
+    },
 }
 
 /// Selection of individual flags via booleans.
@@ -462,9 +470,9 @@ fn run_interactive(full: bool) -> io::Result<Option<u16>> {
                 }
                 KeyCode::Enter => {
                     let value = compute_flag_value(&selected);
+                    // Clear the interactive UI, then leave raw mode and print on a clean screen.
+                    execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
                     terminal::disable_raw_mode()?;
-                    // After leaving raw mode, move to a fresh line and print the explanation.
-                    println!("\n");
                     print_explanation(value, full);
                     return Ok(Some(value));
                 }
@@ -613,8 +621,12 @@ fn main() {
                 std::process::exit(1);
             }
         },
-        (None, Some(Command::Interactive)) => {
-            if let Err(err) = run_interactive(cli.full) {
+        (None, Some(Command::Select { full: select_full })) => {
+            // Allow `flagsamurai --full select`, `flagsamurai select --full`,
+            // or even both; in all cases, treat `--full` as enabled if it
+            // appears at least once.
+            let effective_full = cli.full || select_full;
+            if let Err(err) = run_interactive(effective_full) {
                 eprintln!("{}", format!("Interactive mode failed: {err}").bright_red());
                 std::process::exit(1);
             }
