@@ -160,6 +160,22 @@ struct Cli {
     #[arg(short, long)]
     full: bool,
 
+    /// Treat the input as an integer and print the corresponding bitmask.
+    ///
+    /// If the input already looks like a bitmask (e.g. `0x63`), the same
+    /// bitmask is printed but a warning is emitted on stderr suggesting
+    /// `-i/--int` instead.
+    #[arg(short = 'b', long = "bit")]
+    bit: bool,
+
+    /// Treat the input as a bitmask and print the corresponding integer.
+    ///
+    /// If the input already looks like an integer (e.g. `99`), the same
+    /// integer is printed but a warning is emitted on stderr suggesting
+    /// `-b/--bit` instead.
+    #[arg(short = 'i', long = "int")]
+    int_mode: bool,
+
     /// Numeric flag value to explain (decimal or hex like 0x93).
     ///
     /// If provided without a subcommand, this is handled like the `explain` command.
@@ -268,6 +284,15 @@ fn parse_flag_value(input: &str) -> Result<u16, String> {
     }
 }
 
+/// Heuristic to decide whether the original string "looks like" a bitmask.
+///
+/// We treat hex values with a `0x`/`0X` prefix as bitmask-style input and
+/// plain decimal numbers as integer input.
+fn input_looks_like_bitmask(input: &str) -> bool {
+    let trimmed = input.trim();
+    trimmed.starts_with("0x") || trimmed.starts_with("0X")
+}
+
 /// Convert a numeric flag value into the boolean vector used by
 /// `switch_mate_flags`, aligned with the `FLAGS` table.
 fn value_to_checked_flags(flag_value: u16) -> Vec<bool> {
@@ -352,15 +377,73 @@ fn print_explanation(flag_value: u16, full: bool) {
 fn main() {
     let cli = Cli::parse();
 
+    // These modes are mutually exclusive; mixing them would be confusing.
+    if cli.bit && cli.int_mode {
+        eprintln!(
+            "{}",
+            "Options -b/--bit and -i/--int cannot be used together.".bright_red()
+        );
+        std::process::exit(1);
+    }
+
     match (cli.flag, cli.command) {
         // Default behavior: just a number ⇒ explain
-        (Some(flag), None) => match parse_flag_value(&flag) {
-            Ok(value) => print_explanation(value, cli.full),
-            Err(err) => {
-                eprintln!("{}", err.bright_red());
-                std::process::exit(1);
+        (Some(flag), None) => {
+            // -b/--bit: convert integer-style input to bitmask (hex).
+            if cli.bit {
+                let looks_like_bitmask = input_looks_like_bitmask(&flag);
+                match parse_flag_value(&flag) {
+                    Ok(value) => {
+                        println!("{}", format!("0x{:03x}", value));
+                        if looks_like_bitmask {
+                            eprintln!(
+                                "{}",
+                                "Input already looks like a bitmask; -b/--bit is intended for \
+                                 integer input. Did you mean -i/--int?"
+                                    .bright_yellow()
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("{}", err.bright_red());
+                        std::process::exit(1);
+                    }
+                }
+                return;
             }
-        },
+
+            // -i/--int: convert bitmask-style input to integer (decimal).
+            if cli.int_mode {
+                let looks_like_bitmask = input_looks_like_bitmask(&flag);
+                match parse_flag_value(&flag) {
+                    Ok(value) => {
+                        println!("{value}");
+                        if !looks_like_bitmask {
+                            eprintln!(
+                                "{}",
+                                "Input already looks like an integer; -i/--int is intended for \
+                                 bitmask input. Did you mean -b/--bit?"
+                                    .bright_yellow()
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("{}", err.bright_red());
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+
+            // Default: explain flags.
+            match parse_flag_value(&flag) {
+                Ok(value) => print_explanation(value, cli.full),
+                Err(err) => {
+                    eprintln!("{}", err.bright_red());
+                    std::process::exit(1);
+                }
+            }
+        }
 
         // Explicit `explain` subcommand
         (None, Some(Command::Explain { flag })) => match parse_flag_value(&flag) {
