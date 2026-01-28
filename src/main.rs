@@ -1,5 +1,13 @@
 use clap::{Args, Parser, Subcommand};
 use colored::Colorize;
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode},
+    execute,
+    style::{Attribute, Color, Print, SetAttribute, SetForegroundColor},
+    terminal::{self, Clear, ClearType},
+};
+use std::io::{self, Write, stdout};
 
 /// Bit flag with a human-readable name.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -203,6 +211,8 @@ enum Command {
         /// Numeric flag value (decimal, hex like 0x93 is also accepted).
         flag: String,
     },
+    /// Interactive terminal UI for selecting flags via a checklist.
+    Interactive,
 }
 
 /// Selection of individual flags via booleans.
@@ -374,6 +384,96 @@ fn print_explanation(flag_value: u16, full: bool) {
     print_single_read_explanation(mate_value);
 }
 
+/// Simple interactive checklist UI for selecting flags.
+///
+/// - Arrow Up/Down: move selection
+/// - Space: toggle current flag
+/// - Enter: accept and return the computed flag value
+/// - q: cancel without making changes
+fn run_interactive(full: bool) -> io::Result<Option<u16>> {
+    terminal::enable_raw_mode()?;
+    let mut out = stdout();
+
+    execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+
+    let mut selected: Vec<bool> = vec![false; FLAGS.len()];
+    let mut index: usize = 0;
+
+    loop {
+        // Redraw screen
+        execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+        writeln!(
+            out,
+            "{}",
+            "Interactive flag selection (↑/↓ to move, space to toggle, Enter to accept, q to quit)"
+                .bold()
+        )?;
+        writeln!(out)?;
+
+        // Each flag rendered on its own fixed row starting at row 2 so that
+        // the list stays left-aligned regardless of wrapping.
+        for (i, flag) in FLAGS.iter().enumerate() {
+            let row = 2 + i as u16;
+            execute!(out, cursor::MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+
+            let marker = if selected[i] { "[x]" } else { "[ ]" };
+            let cursor_char = if i == index { ">" } else { " " };
+            let line = format!(
+                "{cursor_char} {} {:>3}  {}",
+                marker, flag.bitmask, flag.name
+            );
+
+            if i == index {
+                execute!(
+                    out,
+                    SetAttribute(Attribute::Reverse),
+                    SetForegroundColor(Color::Cyan),
+                    Print(&line),
+                    SetAttribute(Attribute::Reset),
+                    SetForegroundColor(Color::Reset)
+                )?;
+            } else {
+                write!(out, "{line}")?;
+            }
+        }
+
+        out.flush()?;
+
+        // Handle input
+        if let Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => {
+                    terminal::disable_raw_mode()?;
+                    // User cancelled
+                    return Ok(None);
+                }
+                KeyCode::Up => {
+                    if index == 0 {
+                        index = FLAGS.len() - 1;
+                    } else {
+                        index -= 1;
+                    }
+                }
+                KeyCode::Down => {
+                    index = (index + 1) % FLAGS.len();
+                }
+                KeyCode::Char(' ') => {
+                    selected[index] = !selected[index];
+                }
+                KeyCode::Enter => {
+                    let value = compute_flag_value(&selected);
+                    terminal::disable_raw_mode()?;
+                    // After leaving raw mode, move to a fresh line and print the explanation.
+                    println!("\n");
+                    print_explanation(value, full);
+                    return Ok(Some(value));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -405,7 +505,7 @@ fn main() {
                         }
                     }
                     Err(err) => {
-                        eprintln!("{}", err.bright_red());
+                        eprintln!("{}", err.to_string().bright_red());
                         std::process::exit(1);
                     }
                 }
@@ -428,7 +528,7 @@ fn main() {
                         }
                     }
                     Err(err) => {
-                        eprintln!("{}", err.bright_red());
+                        eprintln!("{}", err.to_string().bright_red());
                         std::process::exit(1);
                     }
                 }
@@ -439,7 +539,7 @@ fn main() {
             match parse_flag_value(&flag) {
                 Ok(value) => print_explanation(value, cli.full),
                 Err(err) => {
-                    eprintln!("{}", err.bright_red());
+                    eprintln!("{}", err.to_string().bright_red());
                     std::process::exit(1);
                 }
             }
@@ -449,7 +549,7 @@ fn main() {
         (None, Some(Command::Explain { flag })) => match parse_flag_value(&flag) {
             Ok(value) => print_explanation(value, cli.full),
             Err(err) => {
-                eprintln!("{}", err.bright_red());
+                eprintln!("{}", err.to_string().bright_red());
                 std::process::exit(1);
             }
         },
@@ -513,6 +613,12 @@ fn main() {
                 std::process::exit(1);
             }
         },
+        (None, Some(Command::Interactive)) => {
+            if let Err(err) = run_interactive(cli.full) {
+                eprintln!("{}", format!("Interactive mode failed: {err}").bright_red());
+                std::process::exit(1);
+            }
+        }
 
         // No args at all: print a short usage hint.
         (None, None) => {
