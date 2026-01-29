@@ -9,10 +9,12 @@ use crossterm::{
 };
 use std::io::{self, Write, stdout};
 
-/// Bit flag with a human-readable name.
+/// Bit flag with a human-readable name and a short name for diff output.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct Flag {
     name: &'static str,
+    /// Short snake_case name used in diff output (e.g. proper_pair, read_reverse).
+    short_name: &'static str,
     bitmask: u16,
 }
 
@@ -23,50 +25,62 @@ struct Flag {
 const FLAGS: [Flag; 12] = [
     Flag {
         name: "read paired",
+        short_name: "read_paired",
         bitmask: 0x1,
     },
     Flag {
         name: "read mapped in proper pair",
+        short_name: "proper_pair",
         bitmask: 0x2,
     },
     Flag {
         name: "read unmapped",
+        short_name: "read_unmapped",
         bitmask: 0x4,
     },
     Flag {
         name: "mate unmapped",
+        short_name: "mate_unmapped",
         bitmask: 0x8,
     },
     Flag {
         name: "read reverse strand",
+        short_name: "read_reverse",
         bitmask: 0x10,
     },
     Flag {
         name: "mate reverse strand",
+        short_name: "mate_reverse",
         bitmask: 0x20,
     },
     Flag {
         name: "first in pair",
+        short_name: "first_in_pair",
         bitmask: 0x40,
     },
     Flag {
         name: "second in pair",
+        short_name: "second_in_pair",
         bitmask: 0x80,
     },
     Flag {
         name: "not primary alignment",
+        short_name: "not_primary",
         bitmask: 0x100,
     },
     Flag {
         name: "fails quality checks",
+        short_name: "fails_qc",
         bitmask: 0x200,
     },
     Flag {
         name: "PCR/optical duplicate",
+        short_name: "duplicate",
         bitmask: 0x400,
     },
     Flag {
         name: "supplementary alignment",
+        short_name: "supplementary",
         bitmask: 0x800,
     },
 ];
@@ -236,6 +250,12 @@ enum Command {
         #[arg(num_args = 1.., value_name = "FLAG")]
         flags: Vec<String>,
     },
+    /// Show which flags differ between two values (+ in second only, - in first only).
+    Diff {
+        /// Exactly two flag values (decimal or hex), e.g. `99 0x93`.
+        #[arg(num_args = 1.., value_name = "FLAG")]
+        flags: Vec<String>,
+    },
 }
 
 /// Selection of individual flags via booleans.
@@ -362,8 +382,9 @@ fn print_single_read_explanation(flag_value: u16) {
     if !bad_flags.is_empty() {
         println!();
         println!(
-            "{}",
-            "Warning: the following flags are invalid when the read is not paired:"
+            "{}{}",
+            "Warning".bold().bright_yellow().underline(),
+            ": The following flags are invalid when the read is not paired:"
                 .bright_yellow()
                 .bold()
         );
@@ -405,6 +426,148 @@ fn print_explanation(flag_value: u16, full: bool) {
         "read".bold().bright_blue()
     );
     print_single_read_explanation(mate_value);
+}
+
+/// Print a diff of two flag values: + flags only in second, - flags only in first.
+/// Print a human-friendly diff of two flag values: header, common flags,
+/// then only-in-second and only-in-first sections.
+fn print_diff(first_value: u16, second_value: u16) {
+    println!(
+        "{} {} {} {} {} {}",
+        "Comparing flags:".bold(),
+        first_value.to_string().bright_cyan(),
+        format!("(0x{:03x})", first_value).bright_black(),
+        "→".bold(),
+        second_value.to_string().bright_cyan(),
+        format!("(0x{:03x})", second_value).bright_black(),
+    );
+    println!();
+
+    let mut common = Vec::new();
+    let mut only_second = Vec::new();
+    let mut only_first = Vec::new();
+
+    for flag in FLAGS {
+        let in_first = (first_value & flag.bitmask) != 0;
+        let in_second = (second_value & flag.bitmask) != 0;
+        if in_first && in_second {
+            common.push(flag);
+        } else if in_second && !in_first {
+            only_second.push(flag);
+        } else if in_first && !in_second {
+            only_first.push(flag);
+        }
+    }
+
+    println!("{}", "Common flags:".bold().bright_blue());
+    if common.is_empty() {
+        println!("  {}", "(none)".dimmed());
+    } else {
+        for flag in &common {
+            println!(
+                "  - {} ({}): {}",
+                format!("{:>3}", flag.bitmask).bright_cyan(),
+                format!("0x{:03x}", flag.bitmask).bright_black(),
+                flag.name
+            );
+        }
+    }
+    println!();
+
+    // Section: only in first. Decimal in cyan, hex in gray, punctuation in blue.
+    println!(
+        "{}{}{}{}{}{}{}{}",
+        "Only in ".bold().bright_blue(),
+        "first".bold().green(),
+        " (".bold().bright_blue(),
+        first_value.to_string().bright_cyan(),
+        ",".bold().bright_blue(),
+        " ".bold().bright_blue(),
+        format!("0x{:03x}", first_value).bright_black(),
+        "):".bold().bright_blue(),
+    );
+    if only_first.is_empty() {
+        println!("  {}", "(none)".dimmed());
+    } else {
+        for flag in &only_first {
+            println!(
+                "  - {} ({}): {}",
+                format!("{:>3}", flag.bitmask).green(),
+                format!("0x{:03x}", flag.bitmask).bright_black(),
+                flag.name.green()
+            );
+        }
+    }
+    println!();
+
+    // Section: only in second. Same styling as above.
+    println!(
+        "{}{}{}{}{}{}{}{}",
+        "Only in ".bold().bright_blue(),
+        "second".bold().bright_green(),
+        " (".bold().bright_blue(),
+        second_value.to_string().bright_cyan(),
+        ",".bold().bright_blue(),
+        " ".bold().bright_blue(),
+        format!("0x{:03x}", second_value).bright_black(),
+        "):".bold().bright_blue(),
+    );
+    if only_second.is_empty() {
+        println!("  {}", "(none)".dimmed());
+    } else {
+        for flag in &only_second {
+            println!(
+                "  - {} ({}): {}",
+                format!("{:>3}", flag.bitmask).bright_green(),
+                format!("0x{:03x}", flag.bitmask).bright_black(),
+                flag.name.bright_green()
+            );
+        }
+    }
+
+    // Mirror the semantic warnings from `print_single_read_explanation` so
+    // that diff also reports invalid flag combinations (e.g. paired-only
+    // flags used on unpaired reads).
+    let (_summary_first, bad_first) = explain_flags(first_value);
+    let (_summary_second, bad_second) = explain_flags(second_value);
+
+    if !bad_first.is_empty() {
+        println!();
+        println!(
+            "{}{}",
+            "Warning".bold().bright_yellow().underline(),
+            ": The following flags are invalid for the first value when the read is not paired:"
+                .bright_yellow()
+                .bold()
+        );
+        for f in &bad_first {
+            println!(
+                "  - {} {}: {}",
+                format!("{:>3}", f.bitmask).bright_red(),
+                format!("(0x{:03x})", f.bitmask).bright_black(),
+                f.name.bright_red()
+            );
+        }
+    }
+
+    if !bad_second.is_empty() {
+        println!();
+        println!(
+            "{}{}",
+            "Warning".bold().bright_yellow().underline(),
+            ": The following flags are invalid for the second value when the read is not paired:"
+                .bright_yellow()
+                .bold()
+        );
+        for f in &bad_second {
+            println!(
+                "  - {} {}: {}",
+                format!("{:>3}", f.bitmask).bright_red(),
+                format!("(0x{:03x})", f.bitmask).bright_black(),
+                f.name.bright_red()
+            );
+        }
+    }
 }
 
 /// Print a nicely formatted, colorized summary of common SAM flag combinations.
@@ -693,8 +856,9 @@ fn main() {
                 if !bad_flags.is_empty() {
                     println!();
                     println!(
-                        "{}",
-                        "Warning: the following flags are invalid when the read is not paired:"
+                        "{}{}",
+                        "Warning".bold().bright_yellow().underline(),
+                        ": The following flags are invalid when the read is not paired:"
                             .bright_yellow()
                             .bold()
                     );
@@ -743,6 +907,41 @@ fn main() {
                     }
                 }
             }
+        }
+        (None, Some(Command::Diff { flags })) => {
+            if flags.len() != 2 {
+                eprintln!(
+                    "{}{}{}",
+                    "Error".bold().bright_red().underline(),
+                    ": ".bold().bright_red(),
+                    format!(
+                        "The 'diff' subcommand expects exactly 2 flag values, but got {}.",
+                        flags.len()
+                    )
+                    .bright_red()
+                );
+                eprintln!(
+                    "{}",
+                    "Usage: flagsamurai diff <FIRST> <SECOND>".bright_yellow()
+                );
+                std::process::exit(1);
+            }
+
+            let first_value = match parse_flag_value(&flags[0]) {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("{}", err.to_string().bright_red());
+                    std::process::exit(1);
+                }
+            };
+            let second_value = match parse_flag_value(&flags[1]) {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("{}", err.to_string().bright_red());
+                    std::process::exit(1);
+                }
+            };
+            print_diff(first_value, second_value);
         }
 
         // No args at all: print a short usage hint.
