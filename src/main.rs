@@ -324,16 +324,24 @@ impl FlagSelection {
 
 fn parse_flag_value(input: &str) -> Result<u16, String> {
     let trimmed = input.trim();
-    if let Some(stripped) = trimmed
+    let value = if let Some(stripped) = trimmed
         .strip_prefix("0x")
         .or_else(|| trimmed.strip_prefix("0X"))
     {
         u16::from_str_radix(stripped, 16)
-            .map_err(|e| format!("invalid hex flag value '{input}': {e}"))
+            .map_err(|e| format!("invalid hex flag value '{input}': {e}"))?
     } else {
         trimmed
             .parse::<u16>()
-            .map_err(|e| format!("invalid decimal flag value '{input}': {e}"))
+            .map_err(|e| format!("invalid decimal flag value '{input}': {e}"))?
+    };
+
+    if value > 0x0fff {
+        Err(format!(
+            "flag value '{input}' is out of range; must be between 0 and 4095 (0x000 – 0xfff)"
+        ))
+    } else {
+        Ok(value)
     }
 }
 
@@ -911,9 +919,7 @@ fn main() {
         (None, Some(Command::Diff { flags })) => {
             if flags.len() != 2 {
                 eprintln!(
-                    "{}{}{}",
-                    "Error".bold().bright_red().underline(),
-                    ": ".bold().bright_red(),
+                    "{}",
                     format!(
                         "The 'diff' subcommand expects exactly 2 flag values, but got {}.",
                         flags.len()
