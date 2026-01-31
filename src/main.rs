@@ -391,17 +391,17 @@ fn print_single_read_explanation(flag_value: u16) {
         println!();
         println!(
             "{}{}",
-            "Warning".bold().bright_yellow().underline(),
+            "Warning".bold().yellow().underline(),
             ": The following flags are invalid when the read is not paired:"
-                .bright_yellow()
+                .yellow()
                 .bold()
         );
         for f in &bad_flags {
             println!(
                 "  - {} {}: {}",
-                format!("{:>3}", f.bitmask).bright_red(),
+                format!("{:>3}", f.bitmask).red(),
                 format!("(0x{:03x})", f.bitmask).bright_black(),
-                f.name.bright_red()
+                f.name.red()
             );
         }
     }
@@ -416,9 +416,9 @@ fn print_explanation(flag_value: u16, full: bool) {
 
     println!(
         "{} {} {}",
-        "Description of".bold().bright_blue(),
-        "first".bold().bright_green(),
-        "read".bold().bright_blue()
+        "Description of".bold().blue(),
+        "first".bold().green(),
+        "read".bold().blue()
     );
     print_single_read_explanation(flag_value);
     println!();
@@ -429,9 +429,9 @@ fn print_explanation(flag_value: u16, full: bool) {
 
     println!(
         "{} {} {}",
-        "Description of".bold().bright_blue(),
-        "second".bold().bright_green(),
-        "read".bold().bright_blue()
+        "Description of".bold().blue(),
+        "second".bold().green(),
+        "read".bold().blue()
     );
     print_single_read_explanation(mate_value);
 }
@@ -467,7 +467,7 @@ fn print_diff(first_value: u16, second_value: u16) {
         }
     }
 
-    println!("{}", "Common flags:".bold().bright_blue());
+    println!("{}", "Common flags:".bold().blue());
     if common.is_empty() {
         println!("  {}", "(none)".dimmed());
     } else {
@@ -485,14 +485,14 @@ fn print_diff(first_value: u16, second_value: u16) {
     // Section: only in first. Decimal in cyan, hex in gray, punctuation in blue.
     println!(
         "{}{}{}{}{}{}{}{}",
-        "Only in ".bold().bright_blue(),
+        "Only in ".bold().blue(),
         "first".bold().green(),
-        " (".bold().bright_blue(),
+        " (".bold().blue(),
         first_value.to_string().bright_cyan(),
-        ",".bold().bright_blue(),
-        " ".bold().bright_blue(),
+        ",".bold().blue(),
+        " ".bold().blue(),
         format!("0x{:03x}", first_value).bright_black(),
-        "):".bold().bright_blue(),
+        "):".bold().blue(),
     );
     if only_first.is_empty() {
         println!("  {}", "(none)".dimmed());
@@ -511,14 +511,14 @@ fn print_diff(first_value: u16, second_value: u16) {
     // Section: only in second. Same styling as above.
     println!(
         "{}{}{}{}{}{}{}{}",
-        "Only in ".bold().bright_blue(),
-        "second".bold().bright_green(),
-        " (".bold().bright_blue(),
+        "Only in ".bold().blue(),
+        "second".bold().magenta(),
+        " (".bold().blue(),
         second_value.to_string().bright_cyan(),
-        ",".bold().bright_blue(),
-        " ".bold().bright_blue(),
+        ",".bold().blue(),
+        " ".bold().blue(),
         format!("0x{:03x}", second_value).bright_black(),
-        "):".bold().bright_blue(),
+        "):".bold().blue(),
     );
     if only_second.is_empty() {
         println!("  {}", "(none)".dimmed());
@@ -526,9 +526,9 @@ fn print_diff(first_value: u16, second_value: u16) {
         for flag in &only_second {
             println!(
                 "  - {} ({}): {}",
-                format!("{:>3}", flag.bitmask).bright_green(),
+                format!("{:>3}", flag.bitmask).magenta(),
                 format!("0x{:03x}", flag.bitmask).bright_black(),
-                flag.name.bright_green()
+                flag.name.magenta()
             );
         }
     }
@@ -543,17 +543,17 @@ fn print_diff(first_value: u16, second_value: u16) {
         println!();
         println!(
             "{}{}",
-            "Warning".bold().bright_yellow().underline(),
+            "Warning".bold().yellow().underline(),
             ": The following flags are invalid for the first value when the read is not paired:"
-                .bright_yellow()
+                .yellow()
                 .bold()
         );
         for f in &bad_first {
             println!(
                 "  - {} {}: {}",
-                format!("{:>3}", f.bitmask).bright_red(),
+                format!("{:>3}", f.bitmask).red(),
                 format!("(0x{:03x})", f.bitmask).bright_black(),
-                f.name.bright_red()
+                f.name.red()
             );
         }
     }
@@ -562,17 +562,17 @@ fn print_diff(first_value: u16, second_value: u16) {
         println!();
         println!(
             "{}{}",
-            "Warning".bold().bright_yellow().underline(),
+            "Warning".bold().yellow().underline(),
             ": The following flags are invalid for the second value when the read is not paired:"
-                .bright_yellow()
+                .yellow()
                 .bold()
         );
         for f in &bad_second {
             println!(
                 "  - {} {}: {}",
-                format!("{:>3}", f.bitmask).bright_red(),
+                format!("{:>3}", f.bitmask).red(),
                 format!("(0x{:03x})", f.bitmask).bright_black(),
-                f.name.bright_red()
+                f.name.red()
             );
         }
     }
@@ -585,7 +585,7 @@ fn print_diff(first_value: u16, second_value: u16) {
 fn print_common_flags(with_bitmasks: bool) {
     // Helper to print a section header and a list of codes.
     fn print_section(title: &str, codes: &[u16], with_bitmasks: bool) {
-        println!("{}", title.bold().bright_blue());
+        println!("{}", title.bold().blue());
         println!(
             "  {}",
             codes
@@ -607,7 +607,7 @@ fn print_common_flags(with_bitmasks: bool) {
         println!();
     }
 
-    println!("{}", "Common flags*".bold().underline().bright_magenta());
+    println!("{}", "Common flags*".bold().underline().magenta());
     println!();
 
     print_section(
@@ -734,7 +734,7 @@ fn main() {
     if cli.bit && cli.int_mode {
         eprintln!(
             "{}",
-            "Options -b/--bit and -i/--int cannot be used together.".bright_red()
+            "Options -b/--bit and -i/--int cannot be used together.".red()
         );
         std::process::exit(1);
     }
@@ -743,7 +743,7 @@ fn main() {
     if (cli.bit || cli.int_mode) && cli.full {
         eprintln!(
             "{}",
-            "Options -b/--bit or -i/--int cannot be combined with --full.".bright_red()
+            "Options -b/--bit or -i/--int cannot be combined with --full.".red()
         );
         std::process::exit(1);
     }
@@ -763,12 +763,12 @@ fn main() {
                                     "{}",
                                     "Input already looks like a bitmask; -b/--bit is intended for \
                                      integer input. Did you mean -i/--int?"
-                                        .bright_yellow()
+                                        .yellow()
                                 );
                             }
                         }
                         Err(err) => {
-                            eprintln!("{}", err.to_string().bright_red());
+                            eprintln!("{}", err.to_string().red());
                             std::process::exit(1);
                         }
                     }
@@ -788,12 +788,12 @@ fn main() {
                                     "{}",
                                     "Input already looks like an integer; -i/--int is intended for \
                                      bitmask input. Did you mean -b/--bit?"
-                                        .bright_yellow()
+                                        .yellow()
                                 );
                             }
                         }
                         Err(err) => {
-                            eprintln!("{}", err.to_string().bright_red());
+                            eprintln!("{}", err.to_string().red());
                             std::process::exit(1);
                         }
                     }
@@ -809,7 +809,7 @@ fn main() {
                 match parse_flag_value(raw) {
                     Ok(value) => print_explanation(value, cli.full),
                     Err(err) => {
-                        eprintln!("{}", err.to_string().bright_red());
+                        eprintln!("{}", err.to_string().red());
                         std::process::exit(1);
                     }
                 }
@@ -820,7 +820,7 @@ fn main() {
         (None, Some(Command::Explain { flag })) => match parse_flag_value(&flag) {
             Ok(value) => print_explanation(value, cli.full),
             Err(err) => {
-                eprintln!("{}", err.to_string().bright_red());
+                eprintln!("{}", err.to_string().red());
                 std::process::exit(1);
             }
         },
@@ -838,7 +838,7 @@ fn main() {
 
                 println!(
                     "{}",
-                    "After switching mate-related flags:".bold().bright_blue()
+                    "After switching mate-related flags:".bold().blue()
                 );
                 println!(
                     "{} {} {}",
@@ -865,23 +865,23 @@ fn main() {
                     println!();
                     println!(
                         "{}{}",
-                        "Warning".bold().bright_yellow().underline(),
+                        "Warning".bold().yellow().underline(),
                         ": The following flags are invalid when the read is not paired:"
-                            .bright_yellow()
+                            .yellow()
                             .bold()
                     );
                     for f in &bad_flags {
                         println!(
                             "  - {} {}: {}",
-                            format!("{:>3}", f.bitmask).bright_red(),
+                            format!("{:>3}", f.bitmask).red(),
                             format!("(0x{:03x})", f.bitmask).bright_black(),
-                            f.name.bright_red()
+                            f.name.red()
                         );
                     }
                 }
             }
             Err(err) => {
-                eprintln!("{}", err.bright_red());
+                eprintln!("{}", err.red());
                 std::process::exit(1);
             }
         },
@@ -891,7 +891,7 @@ fn main() {
             // appears at least once.
             let effective_full = cli.full || select_full;
             if let Err(err) = run_interactive(effective_full) {
-                eprintln!("{}", format!("Interactive mode failed: {err}").bright_red());
+                eprintln!("{}", format!("Interactive mode failed: {err}").red());
                 std::process::exit(1);
             }
         }
@@ -910,7 +910,7 @@ fn main() {
                 match parse_flag_value(raw) {
                     Ok(value) => print_explanation(value, cli.full),
                     Err(err) => {
-                        eprintln!("{}", err.to_string().bright_red());
+                        eprintln!("{}", err.to_string().red());
                         std::process::exit(1);
                     }
                 }
@@ -924,11 +924,11 @@ fn main() {
                         "The 'diff' subcommand expects exactly 2 flag values, but got {}.",
                         flags.len()
                     )
-                    .bright_red()
+                    .red()
                 );
                 eprintln!(
                     "{}",
-                    "Usage: flagsamurai diff <FIRST> <SECOND>".bright_yellow()
+                    "Usage: flagsamurai diff <FIRST> <SECOND>".yellow()
                 );
                 std::process::exit(1);
             }
@@ -936,14 +936,14 @@ fn main() {
             let first_value = match parse_flag_value(&flags[0]) {
                 Ok(v) => v,
                 Err(err) => {
-                    eprintln!("{}", err.to_string().bright_red());
+                    eprintln!("{}", err.to_string().red());
                     std::process::exit(1);
                 }
             };
             let second_value = match parse_flag_value(&flags[1]) {
                 Ok(v) => v,
                 Err(err) => {
-                    eprintln!("{}", err.to_string().bright_red());
+                    eprintln!("{}", err.to_string().red());
                     std::process::exit(1);
                 }
             };
@@ -954,7 +954,7 @@ fn main() {
         (None, None) => {
             eprintln!(
                 "{}",
-                "Usage: flagsamurai <FLAG> | flagsamurai <SUBCOMMAND> [FLAGS...]".bright_yellow()
+                "Usage: flagsamurai <FLAG> | flagsamurai <SUBCOMMAND> [FLAGS...]".yellow()
             );
             std::process::exit(1);
         }
@@ -963,7 +963,7 @@ fn main() {
         (Some(_), Some(_)) => {
             eprintln!(
                 "{}",
-                "Provide either a FLAG value or a subcommand, not both.".bright_red()
+                "Provide either a FLAG value or a subcommand, not both.".red()
             );
             std::process::exit(1);
         }
