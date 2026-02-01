@@ -340,23 +340,27 @@ struct Cli {
     #[arg(short, long, global = true)]
     full: bool,
 
-    /// Treat the input as an integer and print the corresponding bitmask.
+    /// Treat the input as a decimal or octal value and print the corresponding hexadecimal.
     ///
-    /// If the input already looks like a bitmask (e.g. `0x63`), the same
-    /// bitmask is printed but a warning is emitted on stderr suggesting
-    /// `-i/--int` instead.
-    #[arg(short = 'b', long = "bit", global = false)]
-    bit: bool,
+    /// If the input already looks like hexadecimal (e.g. `0x63`), the same
+    /// value is printed but a warning is emitted on stderr suggesting
+    /// `-d/--dec` instead.
+    #[arg(short = 'x', long = "hex", global = false)]
+    hex: bool,
 
-    /// Treat the input as a bitmask and print the corresponding integer.
+    /// Treat the input as hexadecimal and print the corresponding decimal value.
     ///
-    /// If the input already looks like an integer (e.g. `99`), the same
-    /// integer is printed but a warning is emitted on stderr suggesting
-    /// `-b/--bit` instead.
-    #[arg(short = 'i', long = "int", global = false)]
-    int_mode: bool,
+    /// If the input already looks like a decimal or octal value (e.g. `99` or `0o143`), the same
+    /// decimal value is printed but a warning is emitted on stderr suggesting
+    /// `-x/--hex` instead.
+    #[arg(short = 'd', long = "dec", global = false)]
+    dec: bool,
 
-    /// Numeric flag value(s) to explain (decimal or hex). Multiple values allowed when no subcommand is used.
+    /// Convert the SAM flag(s) to octal format (e.g. 99 → 0o143).
+    #[arg(short = 'o', long = "oct", global = false)]
+    oct: bool,
+
+    /// Numeric flag value(s) to explain (decimal, hexadecimal, or octal). Multiple values allowed when no subcommand is used.
     #[arg(num_args = 1.., value_name = "FLAG")]
     flag: Option<Vec<String>>,
 
@@ -368,7 +372,7 @@ struct Cli {
 enum Command {
     /// Explain the meaning of one or more numeric flag values.
     Explain {
-        /// Flag value(s) to explain (decimal or hex, e.g. 99 0x63 29).
+        /// Flag value(s) to explain (decimal, hexadecimal, or octal, e.g. 99 0x63 0o143).
         #[arg(num_args = 1.., value_name = "FLAG")]
         flags: Vec<String>,
     },
@@ -380,7 +384,7 @@ enum Command {
     /// bits (unmapped, reverse, first/second in pair), and reports the new
     /// value and its explanation.
     Switch {
-        /// Numeric flag value (decimal, hex like 0x93 is also accepted).
+        /// Numeric flag value (decimal, hexadecimal, or octal, e.g. 99 0x93 0o143).
         flag: String,
     },
     /// Interactive terminal UI for selecting flags via a checklist.
@@ -395,7 +399,7 @@ enum Command {
     },
     /// Show common SAM flag combinations and their meanings.
     Common {
-        /// Also show the hex bitmask alongside each decimal value.
+        /// Also show the hexadecimal bitmask alongside each decimal value.
         ///
         /// This is equivalent to using the top-level `--full` flag. Using
         /// `--full` either before or after `common` (or both) has the same
@@ -403,15 +407,15 @@ enum Command {
         #[arg(short, long)]
         full: bool,
     },
-    /// Explain multiple flag values in one run (decimal and hex can be mixed).
+    /// Explain multiple flag values in one run (decimal, hexadecimal, and octal can be mixed).
     Evaluate {
-        /// Flag values to explain, separated by spaces (e.g. 99 0x63 147).
+        /// Flag values to explain, separated by spaces (e.g. 99 0x63 0o143).
         #[arg(num_args = 1.., value_name = "FLAG")]
         flags: Vec<String>,
     },
     /// Show which flags differ between two values (+ in second only, - in first only).
     Diff {
-        /// Exactly two flag values (decimal or hex), e.g. `99 0x93`.
+        /// Exactly two flag values (decimal, hexadecimal, or octal), e.g. `99 0x93 0o143`.
         #[arg(num_args = 1.., value_name = "FLAG")]
         flags: Vec<String>,
     },
@@ -483,34 +487,66 @@ impl FlagSelection {
 
 fn parse_flag_value(input: &str) -> Result<u16, String> {
     let trimmed = input.trim();
-    let value = if let Some(stripped) = trimmed
+    let (value, input_was_octal) = if let Some(stripped) = trimmed
         .strip_prefix("0x")
         .or_else(|| trimmed.strip_prefix("0X"))
     {
-        u16::from_str_radix(stripped, 16)
-            .map_err(|e| format!("Invalid hex flag value '{input}': {e}"))?
+        let v = u16::from_str_radix(stripped, 16)
+            .map_err(|e| format!("Invalid hexadecimal flag value '{input}': {e}"))?;
+        (v, false)
+    } else if let Some(stripped) = trimmed
+        .strip_prefix("0o")
+        .or_else(|| trimmed.strip_prefix("0O"))
+    {
+        let v = u16::from_str_radix(stripped, 8).map_err(|_| {
+            format!(
+                "Flag value '{input}' is out of range; must be between 0 and 4095 (0o0000 – 0o7777)"
+            )
+        })?;
+        (v, true)
     } else {
-        trimmed
+        let v = trimmed
             .parse::<u16>()
-            .map_err(|e| format!("Invalid decimal flag value '{input}': {e}"))?
+            .map_err(|e| format!("Invalid decimal flag value '{input}': {e}"))?;
+        (v, false)
     };
 
     if value > 0x0fff {
+        let range = if input_was_octal {
+            "0o0000 – 0o7777"
+        } else {
+            "0x000 – 0xfff"
+        };
         Err(format!(
-            "Flag value '{input}' is out of range; must be between 0 and 4095 (0x000 – 0xfff)"
+            "Flag value '{input}' is out of range; must be between 0 and 4095 ({range})"
         ))
     } else {
         Ok(value)
     }
 }
 
-/// Heuristic to decide whether the original string "looks like" a bitmask.
+/// Heuristic to decide whether the original string "looks like" hexadecimal.
 ///
-/// We treat hex values with a `0x`/`0X` prefix as bitmask-style input and
-/// plain decimal numbers as integer input.
+/// We treat values with a `0x`/`0X` prefix as hexadecimal input and
+/// plain decimal or octal (e.g. `0o143`) as decimal/octal input.
 fn input_looks_like_bitmask(input: &str) -> bool {
     let trimmed = input.trim();
     trimmed.starts_with("0x") || trimmed.starts_with("0X")
+}
+
+/// True if the input has no radix prefix (0x, 0o, etc.), i.e. looks like plain decimal.
+fn input_looks_like_plain_decimal(input: &str) -> bool {
+    let trimmed = input.trim();
+    !(trimmed.starts_with("0x")
+        || trimmed.starts_with("0X")
+        || trimmed.starts_with("0o")
+        || trimmed.starts_with("0O"))
+}
+
+/// True if the input has an octal prefix (0o or 0O).
+fn input_looks_like_octal(input: &str) -> bool {
+    let trimmed = input.trim();
+    trimmed.starts_with("0o") || trimmed.starts_with("0O")
 }
 
 /// Convert a numeric flag value into the boolean vector used by
@@ -649,7 +685,7 @@ fn print_diff(first_value: u16, second_value: u16, out: &mut StandardStream) {
     }
     writeln!(out).unwrap();
 
-    // Section: only in first. Decimal in cyan, hex in gray, punctuation in blue.
+    // Section: only in first. Decimal in cyan, hexadecimal in gray, punctuation in blue.
     write_blue_bold(out, "Only in ").unwrap();
     write_green(out, "first").unwrap();
     write_blue_bold(out, " (").unwrap();
@@ -748,7 +784,7 @@ fn print_diff(first_value: u16, second_value: u16, out: &mut StandardStream) {
 
 /// Print a nicely formatted, colorized summary of common SAM flag combinations.
 ///
-/// When `with_bitmasks` is true, also show the hex bitmask alongside each
+/// When `with_bitmasks` is true, also show the hexadecimal bitmask alongside each
 /// decimal value.
 fn print_common_flags(with_bitmasks: bool, out: &mut StandardStream) {
     // Helper to print a section header and a list of codes.
@@ -903,21 +939,21 @@ fn main() {
     let mut stderr = StandardStream::stderr(choice);
 
     // These modes are mutually exclusive; mixing them would be confusing.
-    if cli.bit && cli.int_mode {
+    if [cli.hex, cli.dec, cli.oct].into_iter().filter(|&b| b).count() > 1 {
         let _ = write_error_message(
             &mut stderr,
-            "Options -b/--bit and -i/--int cannot be used together.",
+            "Options -x/--hex, -d/--dec, and -o/--oct cannot be used together.",
         );
         let _ = writeln!(stderr);
         let _ = stderr.flush();
         std::process::exit(1);
     }
-    // It also doesn't make sense to request bit/int conversion together with
-    // `--full` explanations, since -b/-i only transform numeric values.
-    if (cli.bit || cli.int_mode) && cli.full {
+    // It also doesn't make sense to request bit/int/oct conversion together with
+    // `--full` explanations, since -x/-d/-o only transform numeric values.
+    if (cli.hex || cli.dec || cli.oct) && cli.full {
         let _ = write_error_message(
             &mut stderr,
-            "Options -b/--bit or -i/--int cannot be combined with -f/--full.",
+            "Options -x/--hex, -d/--dec, or -o/--oct cannot be combined with -f/--full.",
         );
         let _ = writeln!(stderr);
         let _ = stderr.flush();
@@ -925,10 +961,10 @@ fn main() {
     }
 
     match (cli.flag, cli.command) {
-        // Default behavior: one or more flag values ⇒ explain each (or -b/-i on all).
+        // Default behavior: one or more flag values ⇒ explain each (or -x/-d/-o on all).
         (Some(flags), None) => {
-            // -b/--bit: convert each value to bitmask (hex), one per line.
-            if cli.bit {
+            // -x/--hex: convert each value to hexadecimal, one per line.
+            if cli.hex {
                 for raw in &flags {
                     let looks_like_bitmask = input_looks_like_bitmask(raw);
                     match parse_flag_value(raw) {
@@ -937,8 +973,8 @@ fn main() {
                             if looks_like_bitmask {
                                 let _ = write_warning_message(
                                     &mut stderr,
-                                    "Input already looks like a bitmask; -b/--bit is intended for \
-                                     integer input. Did you mean -i/--int?",
+                                    "Input already looks like hexadecimal; -x/--hex is intended for \
+                                     decimal or octal values. Did you mean -d/--dec?",
                                 );
                                 let _ = writeln!(stderr);
                                 let _ = stderr.flush();
@@ -955,18 +991,48 @@ fn main() {
                 return;
             }
 
-            // -i/--int: convert each value to integer (decimal), one per line.
-            if cli.int_mode {
+            // -d/--dec: convert each value to decimal, one per line.
+            if cli.dec {
                 for raw in &flags {
-                    let looks_like_bitmask = input_looks_like_bitmask(raw);
+                    let looks_like_hex = input_looks_like_bitmask(raw);
+                    let looks_like_plain_decimal = input_looks_like_plain_decimal(raw);
                     match parse_flag_value(raw) {
                         Ok(value) => {
                             writeln!(stdout, "{value}").unwrap();
-                            if !looks_like_bitmask {
+                            // Only warn when input is plain decimal (no prefix). Octal (0o...) with -d is valid.
+                            if !looks_like_hex && looks_like_plain_decimal {
                                 let _ = write_warning_message(
                                     &mut stderr,
-                                    "Input already looks like an integer; -i/--int is intended for \
-                                     bitmask input. Did you mean -b/--bit?",
+                                    "Input already looks like decimal; -d/--dec is intended for \
+                                     hexadecimal input. Did you mean -x/--hex?",
+                                );
+                                let _ = writeln!(stderr);
+                                let _ = stderr.flush();
+                            }
+                        }
+                        Err(err) => {
+                            let _ = write_error_message(&mut stderr, &err);
+                            let _ = writeln!(stderr);
+                            let _ = stderr.flush();
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                return;
+            }
+
+            // -o/--oct: convert each value to octal, one per line.
+            if cli.oct {
+                for raw in &flags {
+                    let looks_like_octal = input_looks_like_octal(raw);
+                    match parse_flag_value(raw) {
+                        Ok(value) => {
+                            writeln!(stdout, "0o{:o}", value).unwrap();
+                            if looks_like_octal {
+                                let _ = write_warning_message(
+                                    &mut stderr,
+                                    "Input already looks like octal; -o/--oct is intended for \
+                                     decimal or hexadecimal values. Did you mean -d/--dec?",
                                 );
                                 let _ = writeln!(stderr);
                                 let _ = stderr.flush();
@@ -1054,8 +1120,8 @@ fn main() {
         }
         (None, Some(Command::Common { full: common_full })) => {
             // Honor both top-level and subcommand-level `--full` for this
-            // listing: when set in either place, also show the bitmask
-            // alongside the decimal value.
+            // listing: when set in either place, also show the hexadecimal
+            // bitmask alongside the decimal value.
             let effective_full = cli.full || common_full;
             print_common_flags(effective_full, &mut stdout);
         }
@@ -1080,7 +1146,7 @@ fn main() {
                 let _ = write_error_message(
                     &mut stderr,
                     &format!(
-                        "The 'diff' subcommand expects exactly 2 flag values, but got {}.",
+                        "The 'diff' subcommand expects exactly 2 flag values (decimal, hexadecimal, or octal), but got {}.",
                         flags.len()
                     ),
                 );
