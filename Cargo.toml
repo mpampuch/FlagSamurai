@@ -3,6 +3,15 @@ name = "flagsamurai"
 version = "0.1.0"
 edition = "2024"
 
+# Two binaries from the same source: full name and short alias.
+[[bin]]
+name = "flagsamurai"
+path = "src/main.rs"
+
+[[bin]]
+name = "flagsam"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4.5.56", features = ["derive"] }
 termcolor = "1.4"
