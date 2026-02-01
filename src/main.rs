@@ -381,6 +381,10 @@ struct Cli {
     #[arg(short, long, global = true)]
     full: bool,
 
+    /// Do not output any warnings (e.g. invalid-when-unpaired, or format hints for -x/-d/-o).
+    #[arg(long = "suppress-warnings", global = true)]
+    suppress_warnings: bool,
+
     /// Treat the input as a decimal or octal value and print the corresponding hexadecimal.
     ///
     /// If the input already looks like hexadecimal (e.g. `0x63`), the same
@@ -460,24 +464,29 @@ enum Command {
         #[arg(num_args = 1.., value_name = "FLAG")]
         flags: Vec<String>,
     },
-    /// Explain flags and output in `samtools flags` style (colourised): hex (white), decimal (bright cyan), flag names (distinct colours).
+    /// Explain flags and output in `samtools flags` style (colourized by default).
     ///
     /// Each FLAG argument is decimal, hexadecimal, or octal. Output matches `samtools flags` command.
     ///
-    /// Numeric flag values (colours in help match output):
+    /// Numeric flag values:
     ///
-    ///   \x1b[37m0x1\x1b[0m     \x1b[96m1\x1b[0m  \x1b[32mPAIRED\x1b[0m         paired-end / multiple-segment sequencing technology
-    ///   \x1b[37m0x2\x1b[0m     \x1b[96m2\x1b[0m  \x1b[33mPROPER_PAIR\x1b[0m    each segment properly aligned according to aligner
-    ///   \x1b[37m0x4\x1b[0m     \x1b[96m4\x1b[0m  \x1b[34mUNMAP\x1b[0m          segment unmapped
-    ///   \x1b[37m0x8\x1b[0m     \x1b[96m8\x1b[0m  \x1b[35mMUNMAP\x1b[0m         next segment in the template unmapped
-    ///   \x1b[37m0x10\x1b[0m    \x1b[96m16\x1b[0m \x1b[31mREVERSE\x1b[0m        SEQ is reverse complemented
-    ///   \x1b[37m0x20\x1b[0m    \x1b[96m32\x1b[0m \x1b[36mMREVERSE\x1b[0m       SEQ of next segment in template is rev.complemented
-    ///   \x1b[37m0x40\x1b[0m    \x1b[96m64\x1b[0m \x1b[92mREAD1\x1b[0m          the first segment in the template
-    ///   \x1b[37m0x80\x1b[0m    \x1b[96m128\x1b[0m \x1b[93mREAD2\x1b[0m          the last segment in the template
-    ///   \x1b[37m0x100\x1b[0m   \x1b[96m256\x1b[0m \x1b[94mSECONDARY\x1b[0m      secondary alignment
-    ///   \x1b[37m0x200\x1b[0m   \x1b[96m512\x1b[0m \x1b[95mQCFAIL\x1b[0m         not passing quality controls or other filters
-    ///   \x1b[37m0x400\x1b[0m   \x1b[96m1024\x1b[0m \x1b[91mDUP\x1b[0m            PCR or optical duplicate
-    ///   \x1b[37m0x800\x1b[0m   \x1b[96m2048\x1b[0m \x1b[97mSUPPLEMENTARY\x1b[0m  supplementary alignment
+    ///   0x1     1  PAIRED         paired-end / multiple-segment sequencing technology
+    ///   0x2     2  PROPER_PAIR    each segment properly aligned according to aligner
+    ///   0x4     4  UNMAP          segment unmapped
+    ///   0x8     8  MUNMAP         next segment in the template unmapped
+    ///  0x10    16  REVERSE        SEQ is reverse complemented
+    ///  0x20    32  MREVERSE       SEQ of next segment in template is rev.complemented
+    ///  0x40    64  READ1          the first segment in the template
+    ///  0x80   128  READ2          the last segment in the template
+    /// 0x100   256  SECONDARY      secondary alignment
+    /// 0x200   512  QCFAIL         not passing quality controls or other filters
+    /// 0x400  1024  DUP            PCR or optical duplicate
+    /// 0x800  2048  SUPPLEMENTARY  supplementary alignment
+    ///
+    /// Full output parity with `samtools flags` can be achieved by running this subcommand with `--suppress-warnings` and `--color=never` (or `--colour=never`).
+    ///
+    /// This command also implements bounds-checking and proper octal notation support, which as of samtools version 1.16.1, the `samtools flags` subcommand does not.
+    #[command(verbatim_doc_comment)]
     Samtools {
         /// Flag value(s) to show (decimal, hexadecimal, or octal, e.g. 99 0x63 0o143).
         #[arg(num_args = 1.., value_name = "FLAG")]
@@ -626,7 +635,11 @@ fn value_to_checked_flags(flag_value: u16) -> Vec<bool> {
 }
 
 /// Print explanation for a single read (no mate-swapping), with color.
-fn print_single_read_explanation(flag_value: u16, out: &mut StandardStream) {
+fn print_single_read_explanation(
+    flag_value: u16,
+    out: &mut StandardStream,
+    suppress_warnings: bool,
+) {
     let (summary, _bad_flags) = explain_flags(flag_value);
 
     write_bold(out, "Flag value:").unwrap();
@@ -650,17 +663,22 @@ fn print_single_read_explanation(flag_value: u16, out: &mut StandardStream) {
         }
     }
 
-    print_invalid_for_unpaired_warning(flag_value, out, false);
+    print_invalid_for_unpaired_warning(flag_value, out, false, suppress_warnings);
     let _ = out.flush();
 }
 
 /// If the flag value has "invalid when unpaired" flags set, print a warning to `out`.
 /// When `samtools_style` is true, use samtools flag names (e.g. PROPER_PAIR) instead of long names.
+/// No-op when `suppress_warnings` is true.
 fn print_invalid_for_unpaired_warning(
     flag_value: u16,
     out: &mut StandardStream,
     samtools_style: bool,
+    suppress_warnings: bool,
 ) {
+    if suppress_warnings {
+        return;
+    }
     let (_summary, bad_flags) = explain_flags(flag_value);
     if bad_flags.is_empty() {
         return;
@@ -694,9 +712,14 @@ fn print_invalid_for_unpaired_warning(
 }
 
 /// Print explanation, optionally for both reads when `full` is true.
-fn print_explanation(flag_value: u16, full: bool, out: &mut StandardStream) {
+fn print_explanation(
+    flag_value: u16,
+    full: bool,
+    out: &mut StandardStream,
+    suppress_warnings: bool,
+) {
     if !full {
-        print_single_read_explanation(flag_value, out);
+        print_single_read_explanation(flag_value, out, suppress_warnings);
         return;
     }
 
@@ -706,7 +729,7 @@ fn print_explanation(flag_value: u16, full: bool, out: &mut StandardStream) {
     write!(out, " ").unwrap();
     write_blue_bold(out, "read").unwrap();
     writeln!(out).unwrap();
-    print_single_read_explanation(flag_value, out);
+    print_single_read_explanation(flag_value, out, suppress_warnings);
     writeln!(out).unwrap();
 
     // Second read: flip read/mate-related bits and recompute.
@@ -719,7 +742,7 @@ fn print_explanation(flag_value: u16, full: bool, out: &mut StandardStream) {
     write!(out, " ").unwrap();
     write_blue_bold(out, "read").unwrap();
     writeln!(out).unwrap();
-    print_single_read_explanation(mate_value, out);
+    print_single_read_explanation(mate_value, out, suppress_warnings);
     let _ = out.flush();
 }
 
@@ -747,22 +770,32 @@ fn print_samtools_style(flag_value: u16, out: &mut StandardStream) {
 }
 
 /// Print samtools-style output, optionally two lines when `full` (original and mate-swapped).
-/// Warnings (e.g. invalid when unpaired) are still printed after the line(s), using samtools names.
-fn print_samtools_style_maybe_full(flag_value: u16, full: bool, out: &mut StandardStream) {
+/// Warnings (e.g. invalid when unpaired) are printed after the line(s) unless suppress_warnings.
+fn print_samtools_style_maybe_full(
+    flag_value: u16,
+    full: bool,
+    out: &mut StandardStream,
+    suppress_warnings: bool,
+) {
     print_samtools_style(flag_value, out);
-    print_invalid_for_unpaired_warning(flag_value, out, true);
+    print_invalid_for_unpaired_warning(flag_value, out, true, suppress_warnings);
     if full {
         let checked = value_to_checked_flags(flag_value);
         let (_swapped, mate_value, _summary, _bad_flags) = switch_mate_flags(checked);
         print_samtools_style(mate_value, out);
-        print_invalid_for_unpaired_warning(mate_value, out, true);
+        print_invalid_for_unpaired_warning(mate_value, out, true, suppress_warnings);
     }
 }
 
 /// Print a diff of two flag values: + flags only in second, - flags only in first.
 /// Print a human-friendly diff of two flag values: header, common flags,
 /// then only-in-second and only-in-first sections.
-fn print_diff(first_value: u16, second_value: u16, out: &mut StandardStream) {
+fn print_diff(
+    first_value: u16,
+    second_value: u16,
+    out: &mut StandardStream,
+    suppress_warnings: bool,
+) {
     write_bold(out, "Comparing flags:").unwrap();
     write!(out, " ").unwrap();
     write_bright_cyan(out, &first_value.to_string()).unwrap();
@@ -864,44 +897,46 @@ fn print_diff(first_value: u16, second_value: u16, out: &mut StandardStream) {
     // Mirror the semantic warnings from `print_single_read_explanation` so
     // that diff also reports invalid flag combinations (e.g. paired-only
     // flags used on unpaired reads).
-    let (_summary_first, bad_first) = explain_flags(first_value);
-    let (_summary_second, bad_second) = explain_flags(second_value);
+    if !suppress_warnings {
+        let (_summary_first, bad_first) = explain_flags(first_value);
+        let (_summary_second, bad_second) = explain_flags(second_value);
 
-    if !bad_first.is_empty() {
-        writeln!(out).unwrap();
-        write_warning_message(
-            out,
-            "The following flags are invalid for the first value when the read is not paired:",
-        )
-        .unwrap();
-        writeln!(out).unwrap();
-        for f in &bad_first {
-            write!(out, "  - ").unwrap();
-            write_red(out, &format!("{:>3}", f.bitmask)).unwrap();
-            write!(out, " ").unwrap();
-            write_bright_black(out, &format!("(0x{:03x})", f.bitmask)).unwrap();
-            write!(out, ": ").unwrap();
-            write_red(out, f.name).unwrap();
+        if !bad_first.is_empty() {
             writeln!(out).unwrap();
+            write_warning_message(
+                out,
+                "The following flags are invalid for the first value when the read is not paired:",
+            )
+            .unwrap();
+            writeln!(out).unwrap();
+            for f in &bad_first {
+                write!(out, "  - ").unwrap();
+                write_red(out, &format!("{:>3}", f.bitmask)).unwrap();
+                write!(out, " ").unwrap();
+                write_bright_black(out, &format!("(0x{:03x})", f.bitmask)).unwrap();
+                write!(out, ": ").unwrap();
+                write_red(out, f.name).unwrap();
+                writeln!(out).unwrap();
+            }
         }
-    }
 
-    if !bad_second.is_empty() {
-        writeln!(out).unwrap();
-        write_warning_message(
-            out,
-            "The following flags are invalid for the second value when the read is not paired:",
-        )
-        .unwrap();
-        writeln!(out).unwrap();
-        for f in &bad_second {
-            write!(out, "  - ").unwrap();
-            write_red(out, &format!("{:>3}", f.bitmask)).unwrap();
-            write!(out, " ").unwrap();
-            write_bright_black(out, &format!("(0x{:03x})", f.bitmask)).unwrap();
-            write!(out, ": ").unwrap();
-            write_red(out, f.name).unwrap();
+        if !bad_second.is_empty() {
             writeln!(out).unwrap();
+            write_warning_message(
+                out,
+                "The following flags are invalid for the second value when the read is not paired:",
+            )
+            .unwrap();
+            writeln!(out).unwrap();
+            for f in &bad_second {
+                write!(out, "  - ").unwrap();
+                write_red(out, &format!("{:>3}", f.bitmask)).unwrap();
+                write!(out, " ").unwrap();
+                write_bright_black(out, &format!("(0x{:03x})", f.bitmask)).unwrap();
+                write!(out, ": ").unwrap();
+                write_red(out, f.name).unwrap();
+                writeln!(out).unwrap();
+            }
         }
     }
     let _ = out.flush();
@@ -975,7 +1010,11 @@ fn print_common_flags(with_bitmasks: bool, out: &mut StandardStream) {
 /// - Space: toggle current flag
 /// - Enter: accept and return the computed flag value
 /// - q: cancel without making changes
-fn run_interactive(full: bool, out: &mut StandardStream) -> io::Result<Option<u16>> {
+fn run_interactive(
+    full: bool,
+    out: &mut StandardStream,
+    suppress_warnings: bool,
+) -> io::Result<Option<u16>> {
     terminal::enable_raw_mode()?;
 
     execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
@@ -1048,7 +1087,7 @@ fn run_interactive(full: bool, out: &mut StandardStream) -> io::Result<Option<u1
                     // Clear the interactive UI, then leave raw mode and print on a clean screen.
                     execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
                     terminal::disable_raw_mode()?;
-                    print_explanation(value, full, out);
+                    print_explanation(value, full, out, suppress_warnings);
                     return Ok(Some(value));
                 }
                 _ => {}
@@ -1100,7 +1139,7 @@ fn main() {
                     match parse_flag_value(raw) {
                         Ok(value) => {
                             writeln!(stdout, "0x{:03x}", value).unwrap();
-                            if looks_like_bitmask {
+                            if !cli.suppress_warnings && looks_like_bitmask {
                                 let _ = write_warning_message(
                                     &mut stderr,
                                     "Input already looks like hexadecimal; -x/--hex is intended for \
@@ -1130,7 +1169,8 @@ fn main() {
                         Ok(value) => {
                             writeln!(stdout, "{value}").unwrap();
                             // Only warn when input is plain decimal (no prefix). Octal (0o...) with -d is valid.
-                            if !looks_like_hex && looks_like_plain_decimal {
+                            if !cli.suppress_warnings && !looks_like_hex && looks_like_plain_decimal
+                            {
                                 let _ = write_warning_message(
                                     &mut stderr,
                                     "Input already looks like decimal; -d/--dec is intended for \
@@ -1158,7 +1198,7 @@ fn main() {
                     match parse_flag_value(raw) {
                         Ok(value) => {
                             writeln!(stdout, "0o{:o}", value).unwrap();
-                            if looks_like_octal {
+                            if !cli.suppress_warnings && looks_like_octal {
                                 let _ = write_warning_message(
                                     &mut stderr,
                                     "Input already looks like octal; -o/--oct is intended for \
@@ -1185,7 +1225,9 @@ fn main() {
                     writeln!(stdout).unwrap();
                 }
                 match parse_flag_value(raw) {
-                    Ok(value) => print_explanation(value, cli.full, &mut stdout),
+                    Ok(value) => {
+                        print_explanation(value, cli.full, &mut stdout, cli.suppress_warnings)
+                    }
                     Err(err) => {
                         let _ = write_error_message(&mut stderr, &err);
                         let _ = writeln!(stderr);
@@ -1203,7 +1245,9 @@ fn main() {
                     writeln!(stdout).unwrap();
                 }
                 match parse_flag_value(raw) {
-                    Ok(value) => print_explanation(value, cli.full, &mut stdout),
+                    Ok(value) => {
+                        print_explanation(value, cli.full, &mut stdout, cli.suppress_warnings)
+                    }
                     Err(err) => {
                         let _ = write_error_message(&mut stderr, &err);
                         let _ = writeln!(stderr);
@@ -1218,7 +1262,7 @@ fn main() {
         (None, Some(Command::Compute(selection))) => {
             let checked = selection.to_vec();
             let value = compute_flag_value(&checked);
-            print_explanation(value, cli.full, &mut stdout);
+            print_explanation(value, cli.full, &mut stdout, cli.suppress_warnings);
         }
         (None, Some(Command::Switch { flag })) => match parse_flag_value(&flag) {
             Ok(flag_value) => {
@@ -1226,7 +1270,7 @@ fn main() {
                 let (_swapped, value, _summary, _bad_flags) = switch_mate_flags(checked);
                 let _ = write_blue_bold(&mut stdout, "After switching mate-related flags:");
                 let _ = writeln!(stdout);
-                print_single_read_explanation(value, &mut stdout);
+                print_single_read_explanation(value, &mut stdout, cli.suppress_warnings);
             }
             Err(err) => {
                 let _ = write_error_message(&mut stderr, &err);
@@ -1240,7 +1284,7 @@ fn main() {
             // or even both; in all cases, treat `--full` as enabled if it
             // appears at least once.
             let effective_full = cli.full || select_full;
-            if let Err(err) = run_interactive(effective_full, &mut stdout) {
+            if let Err(err) = run_interactive(effective_full, &mut stdout, cli.suppress_warnings) {
                 let _ =
                     write_error_message(&mut stderr, &format!("Interactive mode failed: {err}"));
                 let _ = writeln!(stderr);
@@ -1261,7 +1305,9 @@ fn main() {
                     writeln!(stdout).unwrap();
                 }
                 match parse_flag_value(raw) {
-                    Ok(value) => print_explanation(value, cli.full, &mut stdout),
+                    Ok(value) => {
+                        print_explanation(value, cli.full, &mut stdout, cli.suppress_warnings)
+                    }
                     Err(err) => {
                         let _ = write_error_message(&mut stderr, &err);
                         let _ = writeln!(stderr);
@@ -1274,7 +1320,12 @@ fn main() {
         (None, Some(Command::Samtools { flags, full })) => {
             for raw in flags.iter() {
                 match parse_flag_value(raw) {
-                    Ok(value) => print_samtools_style_maybe_full(value, full, &mut stdout),
+                    Ok(value) => print_samtools_style_maybe_full(
+                        value,
+                        full,
+                        &mut stdout,
+                        cli.suppress_warnings,
+                    ),
                     Err(err) => {
                         let _ = write_error_message(&mut stderr, &err);
                         let _ = writeln!(stderr);
@@ -1318,7 +1369,12 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            print_diff(first_value, second_value, &mut stdout);
+            print_diff(
+                first_value,
+                second_value,
+                &mut stdout,
+                cli.suppress_warnings,
+            );
         }
 
         // No args at all: print a short usage hint.
