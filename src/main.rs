@@ -299,11 +299,11 @@ fn switch_mate_flags(
 )]
 struct Cli {
     /// When to use terminal colours (always, auto, never).
-    #[arg(long = "color", alias = "colour", value_name = "WHEN", default_value = "auto")]
+    #[arg(long = "color", alias = "colour", value_name = "WHEN", default_value = "auto", global = true)]
     color: ColorWhen,
 
     /// Show information for both reads (original and mate-swapped).
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     full: bool,
 
     /// Treat the input as an integer and print the corresponding bitmask.
@@ -311,7 +311,7 @@ struct Cli {
     /// If the input already looks like a bitmask (e.g. `0x63`), the same
     /// bitmask is printed but a warning is emitted on stderr suggesting
     /// `-i/--int` instead.
-    #[arg(short = 'b', long = "bit")]
+    #[arg(short = 'b', long = "bit", global = true)]
     bit: bool,
 
     /// Treat the input as a bitmask and print the corresponding integer.
@@ -319,7 +319,7 @@ struct Cli {
     /// If the input already looks like an integer (e.g. `99`), the same
     /// integer is printed but a warning is emitted on stderr suggesting
     /// `-b/--bit` instead.
-    #[arg(short = 'i', long = "int")]
+    #[arg(short = 'i', long = "int", global = true)]
     int_mode: bool,
 
     /// Numeric flag value(s) to explain (decimal or hex). Multiple values allowed when no subcommand is used.
@@ -332,10 +332,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Explain the meaning of a numeric flag value.
+    /// Explain the meaning of one or more numeric flag values.
     Explain {
-        /// Numeric flag value (decimal, hex like 0x93 is also accepted).
-        flag: String,
+        /// Flag value(s) to explain (decimal or hex, e.g. 99 0x63 29).
+        #[arg(num_args = 1.., value_name = "FLAG")]
+        flags: Vec<String>,
     },
     /// Compute a numeric flag value from individual boolean flags.
     Compute(FlagSelection),
@@ -968,13 +969,20 @@ fn main() {
         }
 
         // Explicit `explain` subcommand
-        (None, Some(Command::Explain { flag })) => match parse_flag_value(&flag) {
-            Ok(value) => print_explanation(value, cli.full, &mut stdout),
-            Err(err) => {
-                let _ = write_red(&mut stderr, &err);
-                let _ = writeln!(stderr);
-                let _ = stderr.flush();
-                std::process::exit(1);
+        (None, Some(Command::Explain { flags })) => {
+            for (i, raw) in flags.iter().enumerate() {
+                if i > 0 {
+                    writeln!(stdout).unwrap();
+                }
+                match parse_flag_value(raw) {
+                    Ok(value) => print_explanation(value, cli.full, &mut stdout),
+                    Err(err) => {
+                        let _ = write_red(&mut stderr, &err);
+                        let _ = writeln!(stderr);
+                        let _ = stderr.flush();
+                        std::process::exit(1);
+                    }
+                }
             }
         },
 
