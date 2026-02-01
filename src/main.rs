@@ -157,12 +157,14 @@ fn write_bright_black(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
     write_style(w, &spec, s)
 }
 
-/// Bit flag with a human-readable name and a short name for diff output.
+/// Bit flag with a human-readable name, short name for diff, and samtools-style name.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct Flag {
     name: &'static str,
     /// Short snake_case name used in diff output (e.g. proper_pair, read_reverse).
     short_name: &'static str,
+    /// Name used for `--samtools` output (e.g. PROPER_PAIR, MREVERSE, READ1).
+    samtools_name: &'static str,
     bitmask: u16,
 }
 
@@ -174,61 +176,73 @@ const FLAGS: [Flag; 12] = [
     Flag {
         name: "read paired",
         short_name: "read_paired",
+        samtools_name: "PAIRED",
         bitmask: 0x1,
     },
     Flag {
         name: "read mapped in proper pair",
         short_name: "proper_pair",
+        samtools_name: "PROPER_PAIR",
         bitmask: 0x2,
     },
     Flag {
         name: "read unmapped",
         short_name: "read_unmapped",
+        samtools_name: "UNMAP",
         bitmask: 0x4,
     },
     Flag {
         name: "mate unmapped",
         short_name: "mate_unmapped",
+        samtools_name: "MUNMAP",
         bitmask: 0x8,
     },
     Flag {
         name: "read reverse strand",
         short_name: "read_reverse",
+        samtools_name: "REVERSE",
         bitmask: 0x10,
     },
     Flag {
         name: "mate reverse strand",
         short_name: "mate_reverse",
+        samtools_name: "MREVERSE",
         bitmask: 0x20,
     },
     Flag {
         name: "first in pair",
         short_name: "first_in_pair",
+        samtools_name: "READ1",
         bitmask: 0x40,
     },
     Flag {
         name: "second in pair",
         short_name: "second_in_pair",
+        samtools_name: "READ2",
         bitmask: 0x80,
     },
     Flag {
         name: "not primary alignment",
         short_name: "not_primary",
+        samtools_name: "SECONDARY",
         bitmask: 0x100,
     },
     Flag {
         name: "fails quality checks",
         short_name: "fails_qc",
+        samtools_name: "QCFAIL",
         bitmask: 0x200,
     },
     Flag {
         name: "PCR/optical duplicate",
         short_name: "duplicate",
+        samtools_name: "DUP",
         bitmask: 0x400,
     },
     Flag {
         name: "supplementary alignment",
         short_name: "supplementary",
+        samtools_name: "SUPPLEMENTARY",
         bitmask: 0x800,
     },
 ];
@@ -419,6 +433,32 @@ enum Command {
         #[arg(num_args = 1.., value_name = "FLAG")]
         flags: Vec<String>,
     },
+    /// Output in samtools flags style: hex<TAB>decimal<TAB>FLAG,FLAG,...
+    ///
+    /// Each FLAG argument is decimal, hexadecimal, or octal. Output matches `samtools flags`.
+    ///
+    /// Numeric flag values:
+    ///
+    ///   0x1     1  PAIRED         paired-end / multiple-segment sequencing technology
+    ///   0x2     2  PROPER_PAIR    each segment properly aligned according to aligner
+    ///   0x4     4  UNMAP          segment unmapped
+    ///   0x8     8  MUNMAP         next segment in the template unmapped
+    ///  0x10    16  REVERSE        SEQ is reverse complemented
+    ///  0x20    32  MREVERSE       SEQ of next segment in template is rev.complemented
+    ///  0x40    64  READ1          the first segment in the template
+    ///  0x80   128  READ2          the last segment in the template
+    /// 0x100   256  SECONDARY      secondary alignment
+    /// 0x200   512  QCFAIL         not passing quality controls or other filters
+    /// 0x400  1024  DUP            PCR or optical duplicate
+    /// 0x800  2048  SUPPLEMENTARY  supplementary alignment
+    Samtools {
+        /// Flag value(s) to show (decimal, hexadecimal, or octal, e.g. 99 0x63 0o143).
+        #[arg(num_args = 1.., value_name = "FLAG")]
+        flags: Vec<String>,
+        /// Show both reads (original and mate-swapped) as two lines per value.
+        #[arg(short, long)]
+        full: bool,
+    },
 }
 
 /// Selection of individual flags via booleans.
@@ -560,7 +600,7 @@ fn value_to_checked_flags(flag_value: u16) -> Vec<bool> {
 
 /// Print explanation for a single read (no mate-swapping), with color.
 fn print_single_read_explanation(flag_value: u16, out: &mut StandardStream) {
-    let (summary, bad_flags) = explain_flags(flag_value);
+    let (summary, _bad_flags) = explain_flags(flag_value);
 
     write_bold(out, "Flag value:").unwrap();
     write!(out, " ").unwrap();
@@ -583,23 +623,45 @@ fn print_single_read_explanation(flag_value: u16, out: &mut StandardStream) {
         }
     }
 
-    if !bad_flags.is_empty() {
+    print_invalid_for_unpaired_warning(flag_value, out, false);
+    let _ = out.flush();
+}
+
+/// If the flag value has "invalid when unpaired" flags set, print a warning to `out`.
+/// When `samtools_style` is true, use samtools flag names (e.g. PROPER_PAIR) instead of long names.
+fn print_invalid_for_unpaired_warning(
+    flag_value: u16,
+    out: &mut StandardStream,
+    samtools_style: bool,
+) {
+    let (_summary, bad_flags) = explain_flags(flag_value);
+    if bad_flags.is_empty() {
+        return;
+    }
+    writeln!(out).unwrap();
+    write_warning_message(
+        out,
+        "The following flags are invalid when the read is not paired:",
+    )
+    .unwrap();
+    writeln!(out).unwrap();
+    for f in &bad_flags {
+        write!(out, "  - ").unwrap();
+        write_red(out, &format!("{:>3}", f.bitmask)).unwrap();
+        write!(out, " ").unwrap();
+        write_bright_black(out, &format!("(0x{:03x})", f.bitmask)).unwrap();
+        write!(out, ": ").unwrap();
+        let name = if samtools_style {
+            FLAGS
+                .iter()
+                .find(|fl| fl.bitmask == f.bitmask)
+                .map(|fl| fl.samtools_name)
+                .unwrap_or(f.name)
+        } else {
+            f.name
+        };
+        write_red(out, name).unwrap();
         writeln!(out).unwrap();
-        write_warning_message(
-            out,
-            "The following flags are invalid when the read is not paired:",
-        )
-        .unwrap();
-        writeln!(out).unwrap();
-        for f in &bad_flags {
-            write!(out, "  - ").unwrap();
-            write_red(out, &format!("{:>3}", f.bitmask)).unwrap();
-            write!(out, " ").unwrap();
-            write_bright_black(out, &format!("(0x{:03x})", f.bitmask)).unwrap();
-            write!(out, ": ").unwrap();
-            write_red(out, f.name).unwrap();
-            writeln!(out).unwrap();
-        }
     }
     let _ = out.flush();
 }
@@ -632,6 +694,31 @@ fn print_explanation(flag_value: u16, full: bool, out: &mut StandardStream) {
     writeln!(out).unwrap();
     print_single_read_explanation(mate_value, out);
     let _ = out.flush();
+}
+
+/// Print one line in samtools flags style: `0x{hex}\t{decimal}\t{FLAG,FLAG,...}`.
+fn print_samtools_style(flag_value: u16, out: &mut StandardStream) {
+    let names: Vec<&str> = FLAGS
+        .iter()
+        .filter(|f| (flag_value & f.bitmask) != 0)
+        .map(|f| f.samtools_name)
+        .collect();
+    let names_str = names.join(",");
+    writeln!(out, "0x{:x}\t{}\t{}", flag_value, flag_value, names_str).unwrap();
+    let _ = out.flush();
+}
+
+/// Print samtools-style output, optionally two lines when `full` (original and mate-swapped).
+/// Warnings (e.g. invalid when unpaired) are still printed after the line(s), using samtools names.
+fn print_samtools_style_maybe_full(flag_value: u16, full: bool, out: &mut StandardStream) {
+    print_samtools_style(flag_value, out);
+    print_invalid_for_unpaired_warning(flag_value, out, true);
+    if full {
+        let checked = value_to_checked_flags(flag_value);
+        let (_swapped, mate_value, _summary, _bad_flags) = switch_mate_flags(checked);
+        print_samtools_style(mate_value, out);
+        print_invalid_for_unpaired_warning(mate_value, out, true);
+    }
 }
 
 /// Print a diff of two flag values: + flags only in second, - flags only in first.
@@ -1132,6 +1219,19 @@ fn main() {
                 }
                 match parse_flag_value(raw) {
                     Ok(value) => print_explanation(value, cli.full, &mut stdout),
+                    Err(err) => {
+                        let _ = write_error_message(&mut stderr, &err);
+                        let _ = writeln!(stderr);
+                        let _ = stderr.flush();
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        (None, Some(Command::Samtools { flags, full })) => {
+            for raw in flags.iter() {
+                match parse_flag_value(raw) {
+                    Ok(value) => print_samtools_style_maybe_full(value, full, &mut stdout),
                     Err(err) => {
                         let _ = write_error_message(&mut stderr, &err);
                         let _ = writeln!(stderr);
