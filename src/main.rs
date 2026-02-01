@@ -157,6 +157,33 @@ fn write_bright_black(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
     write_style(w, &spec, s)
 }
 
+fn write_with_color(
+    w: &mut dyn WriteColor,
+    color: TermColor,
+    intense: bool,
+    s: &str,
+) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(color)).set_intense(intense);
+    write_style(w, &spec, s)
+}
+
+/// Palette for samtools flag names (12 distinct colors, one per flag).
+const SAMTOOLS_FLAG_COLORS: [(TermColor, bool); 12] = [
+    (TermColor::Green, false),
+    (TermColor::Yellow, false),
+    (TermColor::Blue, false),
+    (TermColor::Magenta, false),
+    (TermColor::Red, false),
+    (TermColor::Cyan, false),
+    (TermColor::Green, true),
+    (TermColor::Yellow, true),
+    (TermColor::Blue, true),
+    (TermColor::Magenta, true),
+    (TermColor::Red, true),
+    (TermColor::Cyan, true),
+];
+
 /// Bit flag with a human-readable name, short name for diff, and samtools-style name.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct Flag {
@@ -433,24 +460,24 @@ enum Command {
         #[arg(num_args = 1.., value_name = "FLAG")]
         flags: Vec<String>,
     },
-    /// Output in samtools flags style: hex<TAB>decimal<TAB>FLAG,FLAG,...
+    /// Explain flags and output in `samtools flags` style (colourised): hex (white), decimal (bright cyan), flag names (distinct colours).
     ///
-    /// Each FLAG argument is decimal, hexadecimal, or octal. Output matches `samtools flags`.
+    /// Each FLAG argument is decimal, hexadecimal, or octal. Output matches `samtools flags` command.
     ///
-    /// Numeric flag values:
+    /// Numeric flag values (colours in help match output):
     ///
-    ///   0x1     1  PAIRED         paired-end / multiple-segment sequencing technology
-    ///   0x2     2  PROPER_PAIR    each segment properly aligned according to aligner
-    ///   0x4     4  UNMAP          segment unmapped
-    ///   0x8     8  MUNMAP         next segment in the template unmapped
-    ///  0x10    16  REVERSE        SEQ is reverse complemented
-    ///  0x20    32  MREVERSE       SEQ of next segment in template is rev.complemented
-    ///  0x40    64  READ1          the first segment in the template
-    ///  0x80   128  READ2          the last segment in the template
-    /// 0x100   256  SECONDARY      secondary alignment
-    /// 0x200   512  QCFAIL         not passing quality controls or other filters
-    /// 0x400  1024  DUP            PCR or optical duplicate
-    /// 0x800  2048  SUPPLEMENTARY  supplementary alignment
+    ///   \x1b[37m0x1\x1b[0m     \x1b[96m1\x1b[0m  \x1b[32mPAIRED\x1b[0m         paired-end / multiple-segment sequencing technology
+    ///   \x1b[37m0x2\x1b[0m     \x1b[96m2\x1b[0m  \x1b[33mPROPER_PAIR\x1b[0m    each segment properly aligned according to aligner
+    ///   \x1b[37m0x4\x1b[0m     \x1b[96m4\x1b[0m  \x1b[34mUNMAP\x1b[0m          segment unmapped
+    ///   \x1b[37m0x8\x1b[0m     \x1b[96m8\x1b[0m  \x1b[35mMUNMAP\x1b[0m         next segment in the template unmapped
+    ///   \x1b[37m0x10\x1b[0m    \x1b[96m16\x1b[0m \x1b[31mREVERSE\x1b[0m        SEQ is reverse complemented
+    ///   \x1b[37m0x20\x1b[0m    \x1b[96m32\x1b[0m \x1b[36mMREVERSE\x1b[0m       SEQ of next segment in template is rev.complemented
+    ///   \x1b[37m0x40\x1b[0m    \x1b[96m64\x1b[0m \x1b[92mREAD1\x1b[0m          the first segment in the template
+    ///   \x1b[37m0x80\x1b[0m    \x1b[96m128\x1b[0m \x1b[93mREAD2\x1b[0m          the last segment in the template
+    ///   \x1b[37m0x100\x1b[0m   \x1b[96m256\x1b[0m \x1b[94mSECONDARY\x1b[0m      secondary alignment
+    ///   \x1b[37m0x200\x1b[0m   \x1b[96m512\x1b[0m \x1b[95mQCFAIL\x1b[0m         not passing quality controls or other filters
+    ///   \x1b[37m0x400\x1b[0m   \x1b[96m1024\x1b[0m \x1b[91mDUP\x1b[0m            PCR or optical duplicate
+    ///   \x1b[37m0x800\x1b[0m   \x1b[96m2048\x1b[0m \x1b[97mSUPPLEMENTARY\x1b[0m  supplementary alignment
     Samtools {
         /// Flag value(s) to show (decimal, hexadecimal, or octal, e.g. 99 0x63 0o143).
         #[arg(num_args = 1.., value_name = "FLAG")]
@@ -696,15 +723,26 @@ fn print_explanation(flag_value: u16, full: bool, out: &mut StandardStream) {
     let _ = out.flush();
 }
 
-/// Print one line in samtools flags style: `0x{hex}\t{decimal}\t{FLAG,FLAG,...}`.
+/// Print one line in samtools flags style: hex (white), decimal (bright_cyan), flag names (distinct colours).
 fn print_samtools_style(flag_value: u16, out: &mut StandardStream) {
-    let names: Vec<&str> = FLAGS
+    write_with_color(out, TermColor::White, false, &format!("0x{:x}", flag_value)).unwrap();
+    write!(out, "\t").unwrap();
+    write_bright_cyan(out, &format!("{}", flag_value)).unwrap();
+    write!(out, "\t").unwrap();
+    let set_flags: Vec<(usize, &str)> = FLAGS
         .iter()
-        .filter(|f| (flag_value & f.bitmask) != 0)
-        .map(|f| f.samtools_name)
+        .enumerate()
+        .filter(|(_, f)| (flag_value & f.bitmask) != 0)
+        .map(|(i, f)| (i, f.samtools_name))
         .collect();
-    let names_str = names.join(",");
-    writeln!(out, "0x{:x}\t{}\t{}", flag_value, flag_value, names_str).unwrap();
+    for (j, (i, name)) in set_flags.iter().enumerate() {
+        let (color, intense) = SAMTOOLS_FLAG_COLORS[*i];
+        write_with_color(out, color, intense, name).unwrap();
+        if j < set_flags.len() - 1 {
+            write!(out, ",").unwrap();
+        }
+    }
+    writeln!(out).unwrap();
     let _ = out.flush();
 }
 
@@ -1026,7 +1064,12 @@ fn main() {
     let mut stderr = StandardStream::stderr(choice);
 
     // These modes are mutually exclusive; mixing them would be confusing.
-    if [cli.hex, cli.dec, cli.oct].into_iter().filter(|&b| b).count() > 1 {
+    if [cli.hex, cli.dec, cli.oct]
+        .into_iter()
+        .filter(|&b| b)
+        .count()
+        > 1
+    {
         let _ = write_error_message(
             &mut stderr,
             "Options -x/--hex, -d/--dec, and -o/--oct cannot be used together.",
