@@ -42,11 +42,7 @@ fn color_choice(when: ColorWhen) -> ColorChoice {
 }
 
 /// Write a styled segment to a termcolor stream. Caller is responsible for newlines and flush.
-fn write_style(
-    w: &mut dyn WriteColor,
-    spec: &ColorSpec,
-    s: &str,
-) -> io::Result<()> {
+fn write_style(w: &mut dyn WriteColor, spec: &ColorSpec, s: &str) -> io::Result<()> {
     w.set_color(spec)?;
     w.write_all(s.as_bytes())?;
     w.reset()?;
@@ -89,6 +85,38 @@ fn write_yellow_bold_underline(w: &mut dyn WriteColor, s: &str) -> io::Result<()
         .set_bold(true)
         .set_underline(true);
     write_style(w, &spec, s)
+}
+
+fn write_red_bold(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Red)).set_bold(true);
+    write_style(w, &spec, s)
+}
+
+fn write_red_bold_underline(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Red))
+        .set_bold(true)
+        .set_underline(true);
+    write_style(w, &spec, s)
+}
+
+/// Print an error message: "Error" in red bold underline, then ": " and the message in red bold.
+/// Callers pass only the message body; the "Error: " prefix is added here.
+fn write_error_message(w: &mut dyn WriteColor, msg: &str) -> io::Result<()> {
+    write_red_bold_underline(w, "Error")?;
+    write_red_bold(w, ": ")?;
+    write_red_bold(w, msg)?;
+    Ok(())
+}
+
+/// Print a warning message: "Warning" in yellow bold underline, then ": " and the message in yellow bold.
+/// Callers pass only the message body; the "Warning: " prefix is added here.
+fn write_warning_message(w: &mut dyn WriteColor, msg: &str) -> io::Result<()> {
+    write_yellow_bold_underline(w, "Warning")?;
+    write_yellow_bold(w, ": ")?;
+    write_yellow_bold(w, msg)?;
+    Ok(())
 }
 
 fn write_blue_bold(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
@@ -299,7 +327,13 @@ fn switch_mate_flags(
 )]
 struct Cli {
     /// When to use terminal colours (always, auto, never).
-    #[arg(long = "color", alias = "colour", value_name = "WHEN", default_value = "auto", global = true)]
+    #[arg(
+        long = "color",
+        alias = "colour",
+        value_name = "WHEN",
+        default_value = "auto",
+        global = true
+    )]
     color: ColorWhen,
 
     /// Show information for both reads (original and mate-swapped).
@@ -311,7 +345,7 @@ struct Cli {
     /// If the input already looks like a bitmask (e.g. `0x63`), the same
     /// bitmask is printed but a warning is emitted on stderr suggesting
     /// `-i/--int` instead.
-    #[arg(short = 'b', long = "bit", global = true)]
+    #[arg(short = 'b', long = "bit", global = false)]
     bit: bool,
 
     /// Treat the input as a bitmask and print the corresponding integer.
@@ -319,7 +353,7 @@ struct Cli {
     /// If the input already looks like an integer (e.g. `99`), the same
     /// integer is printed but a warning is emitted on stderr suggesting
     /// `-b/--bit` instead.
-    #[arg(short = 'i', long = "int", global = true)]
+    #[arg(short = 'i', long = "int", global = false)]
     int_mode: bool,
 
     /// Numeric flag value(s) to explain (decimal or hex). Multiple values allowed when no subcommand is used.
@@ -454,16 +488,16 @@ fn parse_flag_value(input: &str) -> Result<u16, String> {
         .or_else(|| trimmed.strip_prefix("0X"))
     {
         u16::from_str_radix(stripped, 16)
-            .map_err(|e| format!("invalid hex flag value '{input}': {e}"))?
+            .map_err(|e| format!("Invalid hex flag value '{input}': {e}"))?
     } else {
         trimmed
             .parse::<u16>()
-            .map_err(|e| format!("invalid decimal flag value '{input}': {e}"))?
+            .map_err(|e| format!("Invalid decimal flag value '{input}': {e}"))?
     };
 
     if value > 0x0fff {
         Err(format!(
-            "flag value '{input}' is out of range; must be between 0 and 4095 (0x000 – 0xfff)"
+            "Flag value '{input}' is out of range; must be between 0 and 4095 (0x000 – 0xfff)"
         ))
     } else {
         Ok(value)
@@ -515,9 +549,11 @@ fn print_single_read_explanation(flag_value: u16, out: &mut StandardStream) {
 
     if !bad_flags.is_empty() {
         writeln!(out).unwrap();
-        write_yellow_bold_underline(out, "Warning").unwrap();
-        write_yellow_bold(out, ": The following flags are invalid when the read is not paired:")
-            .unwrap();
+        write_warning_message(
+            out,
+            "The following flags are invalid when the read is not paired:",
+        )
+        .unwrap();
         writeln!(out).unwrap();
         for f in &bad_flags {
             write!(out, "  - ").unwrap();
@@ -672,10 +708,9 @@ fn print_diff(first_value: u16, second_value: u16, out: &mut StandardStream) {
 
     if !bad_first.is_empty() {
         writeln!(out).unwrap();
-        write_yellow_bold_underline(out, "Warning").unwrap();
-        write_yellow_bold(
+        write_warning_message(
             out,
-            ": The following flags are invalid for the first value when the read is not paired:",
+            "The following flags are invalid for the first value when the read is not paired:",
         )
         .unwrap();
         writeln!(out).unwrap();
@@ -692,10 +727,9 @@ fn print_diff(first_value: u16, second_value: u16, out: &mut StandardStream) {
 
     if !bad_second.is_empty() {
         writeln!(out).unwrap();
-        write_yellow_bold_underline(out, "Warning").unwrap();
-        write_yellow_bold(
+        write_warning_message(
             out,
-            ": The following flags are invalid for the second value when the read is not paired:",
+            "The following flags are invalid for the second value when the read is not paired:",
         )
         .unwrap();
         writeln!(out).unwrap();
@@ -718,12 +752,7 @@ fn print_diff(first_value: u16, second_value: u16, out: &mut StandardStream) {
 /// decimal value.
 fn print_common_flags(with_bitmasks: bool, out: &mut StandardStream) {
     // Helper to print a section header and a list of codes.
-    fn print_section(
-        title: &str,
-        codes: &[u16],
-        with_bitmasks: bool,
-        out: &mut StandardStream,
-    ) {
+    fn print_section(title: &str, codes: &[u16], with_bitmasks: bool, out: &mut StandardStream) {
         write_blue_bold(out, title).unwrap();
         writeln!(out).unwrap();
         write!(out, "  ").unwrap();
@@ -875,7 +904,10 @@ fn main() {
 
     // These modes are mutually exclusive; mixing them would be confusing.
     if cli.bit && cli.int_mode {
-        let _ = write_red(&mut stderr, "Options -b/--bit and -i/--int cannot be used together.");
+        let _ = write_error_message(
+            &mut stderr,
+            "Options -b/--bit and -i/--int cannot be used together.",
+        );
         let _ = writeln!(stderr);
         let _ = stderr.flush();
         std::process::exit(1);
@@ -883,9 +915,9 @@ fn main() {
     // It also doesn't make sense to request bit/int conversion together with
     // `--full` explanations, since -b/-i only transform numeric values.
     if (cli.bit || cli.int_mode) && cli.full {
-        let _ = write_red(
+        let _ = write_error_message(
             &mut stderr,
-            "Options -b/--bit or -i/--int cannot be combined with --full.",
+            "Options -b/--bit or -i/--int cannot be combined with -f/--full.",
         );
         let _ = writeln!(stderr);
         let _ = stderr.flush();
@@ -903,7 +935,7 @@ fn main() {
                         Ok(value) => {
                             writeln!(stdout, "0x{:03x}", value).unwrap();
                             if looks_like_bitmask {
-                                let _ = write_yellow(
+                                let _ = write_warning_message(
                                     &mut stderr,
                                     "Input already looks like a bitmask; -b/--bit is intended for \
                                      integer input. Did you mean -i/--int?",
@@ -913,7 +945,7 @@ fn main() {
                             }
                         }
                         Err(err) => {
-                            let _ = write_red(&mut stderr, &err);
+                            let _ = write_error_message(&mut stderr, &err);
                             let _ = writeln!(stderr);
                             let _ = stderr.flush();
                             std::process::exit(1);
@@ -931,7 +963,7 @@ fn main() {
                         Ok(value) => {
                             writeln!(stdout, "{value}").unwrap();
                             if !looks_like_bitmask {
-                                let _ = write_yellow(
+                                let _ = write_warning_message(
                                     &mut stderr,
                                     "Input already looks like an integer; -i/--int is intended for \
                                      bitmask input. Did you mean -b/--bit?",
@@ -941,7 +973,7 @@ fn main() {
                             }
                         }
                         Err(err) => {
-                            let _ = write_red(&mut stderr, &err);
+                            let _ = write_error_message(&mut stderr, &err);
                             let _ = writeln!(stderr);
                             let _ = stderr.flush();
                             std::process::exit(1);
@@ -959,7 +991,7 @@ fn main() {
                 match parse_flag_value(raw) {
                     Ok(value) => print_explanation(value, cli.full, &mut stdout),
                     Err(err) => {
-                        let _ = write_red(&mut stderr, &err);
+                        let _ = write_error_message(&mut stderr, &err);
                         let _ = writeln!(stderr);
                         let _ = stderr.flush();
                         std::process::exit(1);
@@ -977,14 +1009,14 @@ fn main() {
                 match parse_flag_value(raw) {
                     Ok(value) => print_explanation(value, cli.full, &mut stdout),
                     Err(err) => {
-                        let _ = write_red(&mut stderr, &err);
+                        let _ = write_error_message(&mut stderr, &err);
                         let _ = writeln!(stderr);
                         let _ = stderr.flush();
                         std::process::exit(1);
                     }
                 }
             }
-        },
+        }
 
         // Other subcommands
         (None, Some(Command::Compute(selection))) => {
@@ -1001,7 +1033,7 @@ fn main() {
                 print_single_read_explanation(value, &mut stdout);
             }
             Err(err) => {
-                let _ = write_red(&mut stderr, &err);
+                let _ = write_error_message(&mut stderr, &err);
                 let _ = writeln!(stderr);
                 let _ = stderr.flush();
                 std::process::exit(1);
@@ -1013,7 +1045,8 @@ fn main() {
             // appears at least once.
             let effective_full = cli.full || select_full;
             if let Err(err) = run_interactive(effective_full, &mut stdout) {
-                let _ = write_red(&mut stderr, &format!("Interactive mode failed: {err}"));
+                let _ =
+                    write_error_message(&mut stderr, &format!("Interactive mode failed: {err}"));
                 let _ = writeln!(stderr);
                 let _ = stderr.flush();
                 std::process::exit(1);
@@ -1034,7 +1067,7 @@ fn main() {
                 match parse_flag_value(raw) {
                     Ok(value) => print_explanation(value, cli.full, &mut stdout),
                     Err(err) => {
-                        let _ = write_red(&mut stderr, &err);
+                        let _ = write_error_message(&mut stderr, &err);
                         let _ = writeln!(stderr);
                         let _ = stderr.flush();
                         std::process::exit(1);
@@ -1044,7 +1077,7 @@ fn main() {
         }
         (None, Some(Command::Diff { flags })) => {
             if flags.len() != 2 {
-                let _ = write_red(
+                let _ = write_error_message(
                     &mut stderr,
                     &format!(
                         "The 'diff' subcommand expects exactly 2 flag values, but got {}.",
@@ -1061,7 +1094,7 @@ fn main() {
             let first_value = match parse_flag_value(&flags[0]) {
                 Ok(v) => v,
                 Err(err) => {
-                    let _ = write_red(&mut stderr, &err);
+                    let _ = write_error_message(&mut stderr, &err);
                     let _ = writeln!(stderr);
                     let _ = stderr.flush();
                     std::process::exit(1);
@@ -1070,7 +1103,7 @@ fn main() {
             let second_value = match parse_flag_value(&flags[1]) {
                 Ok(v) => v,
                 Err(err) => {
-                    let _ = write_red(&mut stderr, &err);
+                    let _ = write_error_message(&mut stderr, &err);
                     let _ = writeln!(stderr);
                     let _ = stderr.flush();
                     std::process::exit(1);
@@ -1092,7 +1125,7 @@ fn main() {
 
         // Both top-level flag and subcommand present: treat as misuse.
         (Some(_), Some(_)) => {
-            let _ = write_red(
+            let _ = write_error_message(
                 &mut stderr,
                 "Provide either a FLAG value or a subcommand, not both.",
             );
