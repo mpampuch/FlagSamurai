@@ -1,5 +1,4 @@
 use clap::{Args, Parser, Subcommand};
-use colored::Colorize;
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode},
@@ -7,7 +6,128 @@ use crossterm::{
     style::{Attribute, Color, Print, SetAttribute, SetForegroundColor},
     terminal::{self, Clear, ClearType},
 };
-use std::io::{self, Write, stdout};
+use std::io::{self, Write};
+use termcolor::{Color as TermColor, ColorChoice, ColorSpec, StandardStream, WriteColor};
+
+/// When to use terminal colours: always, auto (detect TTY), or never.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+enum ColorWhen {
+    Always,
+    #[default]
+    Auto,
+    Never,
+}
+
+impl std::str::FromStr for ColorWhen {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.eq_ignore_ascii_case("always") {
+            true => Ok(ColorWhen::Always),
+            false if s.eq_ignore_ascii_case("auto") => Ok(ColorWhen::Auto),
+            false if s.eq_ignore_ascii_case("never") => Ok(ColorWhen::Never),
+            _ => Err(format!(
+                "invalid value '{s}' for '--color <WHEN>'\n  [possible values: always, auto, never]"
+            )),
+        }
+    }
+}
+
+fn color_choice(when: ColorWhen) -> ColorChoice {
+    match when {
+        ColorWhen::Always => ColorChoice::AlwaysAnsi,
+        ColorWhen::Auto => ColorChoice::Auto,
+        ColorWhen::Never => ColorChoice::Never,
+    }
+}
+
+/// Write a styled segment to a termcolor stream. Caller is responsible for newlines and flush.
+fn write_style(
+    w: &mut dyn WriteColor,
+    spec: &ColorSpec,
+    s: &str,
+) -> io::Result<()> {
+    w.set_color(spec)?;
+    w.write_all(s.as_bytes())?;
+    w.reset()?;
+    Ok(())
+}
+
+fn write_bold(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_bold(true);
+    write_style(w, &spec, s)
+}
+
+fn write_dimmed(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_dimmed(true);
+    write_style(w, &spec, s)
+}
+
+fn write_red(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Red));
+    write_style(w, &spec, s)
+}
+
+fn write_yellow(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Yellow));
+    write_style(w, &spec, s)
+}
+
+fn write_yellow_bold(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Yellow)).set_bold(true);
+    write_style(w, &spec, s)
+}
+
+fn write_yellow_bold_underline(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Yellow))
+        .set_bold(true)
+        .set_underline(true);
+    write_style(w, &spec, s)
+}
+
+fn write_blue_bold(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Blue)).set_bold(true);
+    write_style(w, &spec, s)
+}
+
+fn write_green(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Green));
+    write_style(w, &spec, s)
+}
+
+fn write_magenta(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Magenta));
+    write_style(w, &spec, s)
+}
+
+fn write_magenta_bold_underline(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Magenta))
+        .set_bold(true)
+        .set_underline(true);
+    write_style(w, &spec, s)
+}
+
+fn write_bright_cyan(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Cyan)).set_intense(true);
+    write_style(w, &spec, s)
+}
+
+fn write_bright_black(w: &mut dyn WriteColor, s: &str) -> io::Result<()> {
+    let mut spec = ColorSpec::new();
+    spec.set_fg(Some(TermColor::Black)).set_intense(true);
+    write_style(w, &spec, s)
+}
 
 /// Bit flag with a human-readable name and a short name for diff output.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -178,6 +298,10 @@ fn switch_mate_flags(
     subcommand_precedence_over_arg = true
 )]
 struct Cli {
+    /// When to use terminal colours (always, auto, never).
+    #[arg(long = "color", alias = "colour", value_name = "WHEN", default_value = "auto")]
+    color: ColorWhen,
+
     /// Show information for both reads (original and mate-swapped).
     #[arg(short, long)]
     full: bool,
@@ -364,92 +488,96 @@ fn value_to_checked_flags(flag_value: u16) -> Vec<bool> {
 }
 
 /// Print explanation for a single read (no mate-swapping), with color.
-fn print_single_read_explanation(flag_value: u16) {
+fn print_single_read_explanation(flag_value: u16, out: &mut StandardStream) {
     let (summary, bad_flags) = explain_flags(flag_value);
 
-    println!(
-        "{} {} {}",
-        "Flag value:".bold(),
-        flag_value.to_string().bright_cyan(),
-        format!("(0x{:03x})", flag_value).bright_black()
-    );
+    write_bold(out, "Flag value:").unwrap();
+    write!(out, " ").unwrap();
+    write_bright_cyan(out, &flag_value.to_string()).unwrap();
+    write!(out, " ").unwrap();
+    write_bright_black(out, &format!("(0x{:03x})", flag_value)).unwrap();
+    writeln!(out).unwrap();
     if summary.is_empty() {
-        println!("{}", "No flags are set.".dimmed());
+        write_dimmed(out, "No flags are set.").unwrap();
+        writeln!(out).unwrap();
     } else {
-        println!("{}", "Set flags:".bold());
+        write_bold(out, "Set flags:").unwrap();
+        writeln!(out).unwrap();
         for f in &summary {
-            println!(
-                "  - {} {}: {}",
-                format!("{:>3}", f.bitmask).bright_cyan(),
-                format!("(0x{:03x})", f.bitmask).bright_black(),
-                f.name
-            );
+            write!(out, "  - ").unwrap();
+            write_bright_cyan(out, &format!("{:>3}", f.bitmask)).unwrap();
+            write!(out, " ").unwrap();
+            write_bright_black(out, &format!("(0x{:03x})", f.bitmask)).unwrap();
+            writeln!(out, ": {}", f.name).unwrap();
         }
     }
 
     if !bad_flags.is_empty() {
-        println!();
-        println!(
-            "{}{}",
-            "Warning".bold().yellow().underline(),
-            ": The following flags are invalid when the read is not paired:"
-                .yellow()
-                .bold()
-        );
+        writeln!(out).unwrap();
+        write_yellow_bold_underline(out, "Warning").unwrap();
+        write_yellow_bold(out, ": The following flags are invalid when the read is not paired:")
+            .unwrap();
+        writeln!(out).unwrap();
         for f in &bad_flags {
-            println!(
-                "  - {} {}: {}",
-                format!("{:>3}", f.bitmask).red(),
-                format!("(0x{:03x})", f.bitmask).bright_black(),
-                f.name.red()
-            );
+            write!(out, "  - ").unwrap();
+            write_red(out, &format!("{:>3}", f.bitmask)).unwrap();
+            write!(out, " ").unwrap();
+            write_bright_black(out, &format!("(0x{:03x})", f.bitmask)).unwrap();
+            write!(out, ": ").unwrap();
+            write_red(out, f.name).unwrap();
+            writeln!(out).unwrap();
         }
     }
+    let _ = out.flush();
 }
 
 /// Print explanation, optionally for both reads when `full` is true.
-fn print_explanation(flag_value: u16, full: bool) {
+fn print_explanation(flag_value: u16, full: bool, out: &mut StandardStream) {
     if !full {
-        print_single_read_explanation(flag_value);
+        print_single_read_explanation(flag_value, out);
         return;
     }
 
-    println!(
-        "{} {} {}",
-        "Description of".bold().blue(),
-        "first".bold().green(),
-        "read".bold().blue()
-    );
-    print_single_read_explanation(flag_value);
-    println!();
+    write_blue_bold(out, "Description of").unwrap();
+    write!(out, " ").unwrap();
+    write_green(out, "first").unwrap();
+    write!(out, " ").unwrap();
+    write_blue_bold(out, "read").unwrap();
+    writeln!(out).unwrap();
+    print_single_read_explanation(flag_value, out);
+    writeln!(out).unwrap();
 
     // Second read: flip read/mate-related bits and recompute.
     let checked = value_to_checked_flags(flag_value);
     let (_swapped, mate_value, _summary, _bad_flags) = switch_mate_flags(checked);
 
-    println!(
-        "{} {} {}",
-        "Description of".bold().blue(),
-        "second".bold().green(),
-        "read".bold().blue()
-    );
-    print_single_read_explanation(mate_value);
+    write_blue_bold(out, "Description of").unwrap();
+    write!(out, " ").unwrap();
+    write_green(out, "second").unwrap();
+    write!(out, " ").unwrap();
+    write_blue_bold(out, "read").unwrap();
+    writeln!(out).unwrap();
+    print_single_read_explanation(mate_value, out);
+    let _ = out.flush();
 }
 
 /// Print a diff of two flag values: + flags only in second, - flags only in first.
 /// Print a human-friendly diff of two flag values: header, common flags,
 /// then only-in-second and only-in-first sections.
-fn print_diff(first_value: u16, second_value: u16) {
-    println!(
-        "{} {} {} {} {} {}",
-        "Comparing flags:".bold(),
-        first_value.to_string().bright_cyan(),
-        format!("(0x{:03x})", first_value).bright_black(),
-        "→".bold(),
-        second_value.to_string().bright_cyan(),
-        format!("(0x{:03x})", second_value).bright_black(),
-    );
-    println!();
+fn print_diff(first_value: u16, second_value: u16, out: &mut StandardStream) {
+    write_bold(out, "Comparing flags:").unwrap();
+    write!(out, " ").unwrap();
+    write_bright_cyan(out, &first_value.to_string()).unwrap();
+    write!(out, " ").unwrap();
+    write_bright_black(out, &format!("(0x{:03x})", first_value)).unwrap();
+    write!(out, " ").unwrap();
+    write_bold(out, "→").unwrap();
+    write!(out, " ").unwrap();
+    write_bright_cyan(out, &second_value.to_string()).unwrap();
+    write!(out, " ").unwrap();
+    write_bright_black(out, &format!("(0x{:03x})", second_value)).unwrap();
+    writeln!(out).unwrap();
+    writeln!(out).unwrap();
 
     let mut common = Vec::new();
     let mut only_second = Vec::new();
@@ -467,69 +595,71 @@ fn print_diff(first_value: u16, second_value: u16) {
         }
     }
 
-    println!("{}", "Common flags:".bold().blue());
+    write_blue_bold(out, "Common flags:").unwrap();
+    writeln!(out).unwrap();
     if common.is_empty() {
-        println!("  {}", "(none)".dimmed());
+        write!(out, "  ").unwrap();
+        write_dimmed(out, "(none)").unwrap();
+        writeln!(out).unwrap();
     } else {
         for flag in &common {
-            println!(
-                "  - {} ({}): {}",
-                format!("{:>3}", flag.bitmask).bright_cyan(),
-                format!("0x{:03x}", flag.bitmask).bright_black(),
-                flag.name
-            );
+            write!(out, "  - ").unwrap();
+            write_bright_cyan(out, &format!("{:>3}", flag.bitmask)).unwrap();
+            write!(out, " (").unwrap();
+            write_bright_black(out, &format!("0x{:03x}", flag.bitmask)).unwrap();
+            writeln!(out, "): {}", flag.name).unwrap();
         }
     }
-    println!();
+    writeln!(out).unwrap();
 
     // Section: only in first. Decimal in cyan, hex in gray, punctuation in blue.
-    println!(
-        "{}{}{}{}{}{}{}{}",
-        "Only in ".bold().blue(),
-        "first".bold().green(),
-        " (".bold().blue(),
-        first_value.to_string().bright_cyan(),
-        ",".bold().blue(),
-        " ".bold().blue(),
-        format!("0x{:03x}", first_value).bright_black(),
-        "):".bold().blue(),
-    );
+    write_blue_bold(out, "Only in ").unwrap();
+    write_green(out, "first").unwrap();
+    write_blue_bold(out, " (").unwrap();
+    write_bright_cyan(out, &first_value.to_string()).unwrap();
+    write_blue_bold(out, ", ").unwrap();
+    write_bright_black(out, &format!("0x{:03x}", first_value)).unwrap();
+    write_blue_bold(out, "):").unwrap();
+    writeln!(out).unwrap();
     if only_first.is_empty() {
-        println!("  {}", "(none)".dimmed());
+        write!(out, "  ").unwrap();
+        write_dimmed(out, "(none)").unwrap();
+        writeln!(out).unwrap();
     } else {
         for flag in &only_first {
-            println!(
-                "  - {} ({}): {}",
-                format!("{:>3}", flag.bitmask).green(),
-                format!("0x{:03x}", flag.bitmask).bright_black(),
-                flag.name.green()
-            );
+            write!(out, "  - ").unwrap();
+            write_green(out, &format!("{:>3}", flag.bitmask)).unwrap();
+            write!(out, " (").unwrap();
+            write_bright_black(out, &format!("0x{:03x}", flag.bitmask)).unwrap();
+            write!(out, "): ").unwrap();
+            write_green(out, flag.name).unwrap();
+            writeln!(out).unwrap();
         }
     }
-    println!();
+    writeln!(out).unwrap();
 
     // Section: only in second. Same styling as above.
-    println!(
-        "{}{}{}{}{}{}{}{}",
-        "Only in ".bold().blue(),
-        "second".bold().magenta(),
-        " (".bold().blue(),
-        second_value.to_string().bright_cyan(),
-        ",".bold().blue(),
-        " ".bold().blue(),
-        format!("0x{:03x}", second_value).bright_black(),
-        "):".bold().blue(),
-    );
+    write_blue_bold(out, "Only in ").unwrap();
+    write_magenta(out, "second").unwrap();
+    write_blue_bold(out, " (").unwrap();
+    write_bright_cyan(out, &second_value.to_string()).unwrap();
+    write_blue_bold(out, ", ").unwrap();
+    write_bright_black(out, &format!("0x{:03x}", second_value)).unwrap();
+    write_blue_bold(out, "):").unwrap();
+    writeln!(out).unwrap();
     if only_second.is_empty() {
-        println!("  {}", "(none)".dimmed());
+        write!(out, "  ").unwrap();
+        write_dimmed(out, "(none)").unwrap();
+        writeln!(out).unwrap();
     } else {
         for flag in &only_second {
-            println!(
-                "  - {} ({}): {}",
-                format!("{:>3}", flag.bitmask).magenta(),
-                format!("0x{:03x}", flag.bitmask).bright_black(),
-                flag.name.magenta()
-            );
+            write!(out, "  - ").unwrap();
+            write_magenta(out, &format!("{:>3}", flag.bitmask)).unwrap();
+            write!(out, " (").unwrap();
+            write_bright_black(out, &format!("0x{:03x}", flag.bitmask)).unwrap();
+            write!(out, "): ").unwrap();
+            write_magenta(out, flag.name).unwrap();
+            writeln!(out).unwrap();
         }
     }
 
@@ -540,101 +670,112 @@ fn print_diff(first_value: u16, second_value: u16) {
     let (_summary_second, bad_second) = explain_flags(second_value);
 
     if !bad_first.is_empty() {
-        println!();
-        println!(
-            "{}{}",
-            "Warning".bold().yellow().underline(),
-            ": The following flags are invalid for the first value when the read is not paired:"
-                .yellow()
-                .bold()
-        );
+        writeln!(out).unwrap();
+        write_yellow_bold_underline(out, "Warning").unwrap();
+        write_yellow_bold(
+            out,
+            ": The following flags are invalid for the first value when the read is not paired:",
+        )
+        .unwrap();
+        writeln!(out).unwrap();
         for f in &bad_first {
-            println!(
-                "  - {} {}: {}",
-                format!("{:>3}", f.bitmask).red(),
-                format!("(0x{:03x})", f.bitmask).bright_black(),
-                f.name.red()
-            );
+            write!(out, "  - ").unwrap();
+            write_red(out, &format!("{:>3}", f.bitmask)).unwrap();
+            write!(out, " ").unwrap();
+            write_bright_black(out, &format!("(0x{:03x})", f.bitmask)).unwrap();
+            write!(out, ": ").unwrap();
+            write_red(out, f.name).unwrap();
+            writeln!(out).unwrap();
         }
     }
 
     if !bad_second.is_empty() {
-        println!();
-        println!(
-            "{}{}",
-            "Warning".bold().yellow().underline(),
-            ": The following flags are invalid for the second value when the read is not paired:"
-                .yellow()
-                .bold()
-        );
+        writeln!(out).unwrap();
+        write_yellow_bold_underline(out, "Warning").unwrap();
+        write_yellow_bold(
+            out,
+            ": The following flags are invalid for the second value when the read is not paired:",
+        )
+        .unwrap();
+        writeln!(out).unwrap();
         for f in &bad_second {
-            println!(
-                "  - {} {}: {}",
-                format!("{:>3}", f.bitmask).red(),
-                format!("(0x{:03x})", f.bitmask).bright_black(),
-                f.name.red()
-            );
+            write!(out, "  - ").unwrap();
+            write_red(out, &format!("{:>3}", f.bitmask)).unwrap();
+            write!(out, " ").unwrap();
+            write_bright_black(out, &format!("(0x{:03x})", f.bitmask)).unwrap();
+            write!(out, ": ").unwrap();
+            write_red(out, f.name).unwrap();
+            writeln!(out).unwrap();
         }
     }
+    let _ = out.flush();
 }
 
 /// Print a nicely formatted, colorized summary of common SAM flag combinations.
 ///
 /// When `with_bitmasks` is true, also show the hex bitmask alongside each
 /// decimal value.
-fn print_common_flags(with_bitmasks: bool) {
+fn print_common_flags(with_bitmasks: bool, out: &mut StandardStream) {
     // Helper to print a section header and a list of codes.
-    fn print_section(title: &str, codes: &[u16], with_bitmasks: bool) {
-        println!("{}", title.bold().blue());
-        println!(
-            "  {}",
-            codes
-                .iter()
-                .map(|c| {
-                    if with_bitmasks {
-                        format!(
-                            "{} {}",
-                            c.to_string().bright_cyan(),
-                            format!("(0x{:03x})", c).bright_black()
-                        )
-                    } else {
-                        c.to_string().bright_cyan().to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        println!();
+    fn print_section(
+        title: &str,
+        codes: &[u16],
+        with_bitmasks: bool,
+        out: &mut StandardStream,
+    ) {
+        write_blue_bold(out, title).unwrap();
+        writeln!(out).unwrap();
+        write!(out, "  ").unwrap();
+        for (i, c) in codes.iter().enumerate() {
+            if i > 0 {
+                write!(out, ", ").unwrap();
+            }
+            if with_bitmasks {
+                write_bright_cyan(out, &c.to_string()).unwrap();
+                write!(out, " ").unwrap();
+                write_bright_black(out, &format!("(0x{:03x})", c)).unwrap();
+            } else {
+                write_bright_cyan(out, &c.to_string()).unwrap();
+            }
+        }
+        writeln!(out).unwrap();
+        writeln!(out).unwrap();
     }
 
-    println!("{}", "Common flags*".bold().underline().magenta());
-    println!();
+    write_magenta_bold_underline(out, "Common flags*").unwrap();
+    writeln!(out).unwrap();
+    writeln!(out).unwrap();
 
     print_section(
         "One of the reads is unmapped:",
         &[73, 133, 89, 121, 165, 181, 101, 117, 153, 185, 69, 137],
         with_bitmasks,
+        out,
     );
 
-    print_section("Both reads are unmapped:", &[77, 141], with_bitmasks);
+    print_section("Both reads are unmapped:", &[77, 141], with_bitmasks, out);
 
     print_section(
         "Mapped within the insert size and in correct orientation:",
         &[99, 147, 83, 163],
         with_bitmasks,
+        out,
     );
 
     print_section(
         "Mapped within the insert size but in wrong orientation:",
         &[67, 131, 115, 179],
         with_bitmasks,
+        out,
     );
 
     print_section(
         "Mapped uniquely, but with wrong insert size:",
         &[81, 161, 97, 145, 65, 129, 113, 177],
         with_bitmasks,
+        out,
     );
+    let _ = out.flush();
 }
 
 /// Simple interactive checklist UI for selecting flags.
@@ -643,9 +784,8 @@ fn print_common_flags(with_bitmasks: bool) {
 /// - Space: toggle current flag
 /// - Enter: accept and return the computed flag value
 /// - q: cancel without making changes
-fn run_interactive(full: bool) -> io::Result<Option<u16>> {
+fn run_interactive(full: bool, out: &mut StandardStream) -> io::Result<Option<u16>> {
     terminal::enable_raw_mode()?;
-    let mut out = stdout();
 
     execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
 
@@ -655,12 +795,11 @@ fn run_interactive(full: bool) -> io::Result<Option<u16>> {
     loop {
         // Redraw screen
         execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
-        writeln!(
+        write_bold(
             out,
-            "{}",
-            "Interactive flag selection (↑/↓ to move, space to toggle, Enter to accept, q to quit)"
-                .bold()
+            "Interactive flag selection (↑/↓ to move, space to toggle, Enter to accept, q to quit)",
         )?;
+        writeln!(out)?;
         writeln!(out)?;
 
         // Each flag rendered on its own fixed row starting at row 2 so that
@@ -718,7 +857,7 @@ fn run_interactive(full: bool) -> io::Result<Option<u16>> {
                     // Clear the interactive UI, then leave raw mode and print on a clean screen.
                     execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
                     terminal::disable_raw_mode()?;
-                    print_explanation(value, full);
+                    print_explanation(value, full, out);
                     return Ok(Some(value));
                 }
                 _ => {}
@@ -729,22 +868,26 @@ fn run_interactive(full: bool) -> io::Result<Option<u16>> {
 
 fn main() {
     let cli = Cli::parse();
+    let choice = color_choice(cli.color);
+    let mut stdout = StandardStream::stdout(choice);
+    let mut stderr = StandardStream::stderr(choice);
 
     // These modes are mutually exclusive; mixing them would be confusing.
     if cli.bit && cli.int_mode {
-        eprintln!(
-            "{}",
-            "Options -b/--bit and -i/--int cannot be used together.".red()
-        );
+        let _ = write_red(&mut stderr, "Options -b/--bit and -i/--int cannot be used together.");
+        let _ = writeln!(stderr);
+        let _ = stderr.flush();
         std::process::exit(1);
     }
     // It also doesn't make sense to request bit/int conversion together with
     // `--full` explanations, since -b/-i only transform numeric values.
     if (cli.bit || cli.int_mode) && cli.full {
-        eprintln!(
-            "{}",
-            "Options -b/--bit or -i/--int cannot be combined with --full.".red()
+        let _ = write_red(
+            &mut stderr,
+            "Options -b/--bit or -i/--int cannot be combined with --full.",
         );
+        let _ = writeln!(stderr);
+        let _ = stderr.flush();
         std::process::exit(1);
     }
 
@@ -757,18 +900,21 @@ fn main() {
                     let looks_like_bitmask = input_looks_like_bitmask(raw);
                     match parse_flag_value(raw) {
                         Ok(value) => {
-                            println!("{}", format!("0x{:03x}", value));
+                            writeln!(stdout, "0x{:03x}", value).unwrap();
                             if looks_like_bitmask {
-                                eprintln!(
-                                    "{}",
+                                let _ = write_yellow(
+                                    &mut stderr,
                                     "Input already looks like a bitmask; -b/--bit is intended for \
-                                     integer input. Did you mean -i/--int?"
-                                        .yellow()
+                                     integer input. Did you mean -i/--int?",
                                 );
+                                let _ = writeln!(stderr);
+                                let _ = stderr.flush();
                             }
                         }
                         Err(err) => {
-                            eprintln!("{}", err.to_string().red());
+                            let _ = write_red(&mut stderr, &err);
+                            let _ = writeln!(stderr);
+                            let _ = stderr.flush();
                             std::process::exit(1);
                         }
                     }
@@ -782,18 +928,21 @@ fn main() {
                     let looks_like_bitmask = input_looks_like_bitmask(raw);
                     match parse_flag_value(raw) {
                         Ok(value) => {
-                            println!("{value}");
+                            writeln!(stdout, "{value}").unwrap();
                             if !looks_like_bitmask {
-                                eprintln!(
-                                    "{}",
+                                let _ = write_yellow(
+                                    &mut stderr,
                                     "Input already looks like an integer; -i/--int is intended for \
-                                     bitmask input. Did you mean -b/--bit?"
-                                        .yellow()
+                                     bitmask input. Did you mean -b/--bit?",
                                 );
+                                let _ = writeln!(stderr);
+                                let _ = stderr.flush();
                             }
                         }
                         Err(err) => {
-                            eprintln!("{}", err.to_string().red());
+                            let _ = write_red(&mut stderr, &err);
+                            let _ = writeln!(stderr);
+                            let _ = stderr.flush();
                             std::process::exit(1);
                         }
                     }
@@ -804,12 +953,14 @@ fn main() {
             // Default: explain each flag value (same as evaluate).
             for (i, raw) in flags.iter().enumerate() {
                 if i > 0 {
-                    println!();
+                    writeln!(stdout).unwrap();
                 }
                 match parse_flag_value(raw) {
-                    Ok(value) => print_explanation(value, cli.full),
+                    Ok(value) => print_explanation(value, cli.full, &mut stdout),
                     Err(err) => {
-                        eprintln!("{}", err.to_string().red());
+                        let _ = write_red(&mut stderr, &err);
+                        let _ = writeln!(stderr);
+                        let _ = stderr.flush();
                         std::process::exit(1);
                     }
                 }
@@ -818,9 +969,11 @@ fn main() {
 
         // Explicit `explain` subcommand
         (None, Some(Command::Explain { flag })) => match parse_flag_value(&flag) {
-            Ok(value) => print_explanation(value, cli.full),
+            Ok(value) => print_explanation(value, cli.full, &mut stdout),
             Err(err) => {
-                eprintln!("{}", err.to_string().red());
+                let _ = write_red(&mut stderr, &err);
+                let _ = writeln!(stderr);
+                let _ = stderr.flush();
                 std::process::exit(1);
             }
         },
@@ -829,59 +982,20 @@ fn main() {
         (None, Some(Command::Compute(selection))) => {
             let checked = selection.to_vec();
             let value = compute_flag_value(&checked);
-            print_explanation(value, cli.full);
+            print_explanation(value, cli.full, &mut stdout);
         }
         (None, Some(Command::Switch { flag })) => match parse_flag_value(&flag) {
             Ok(flag_value) => {
                 let checked = value_to_checked_flags(flag_value);
-                let (_swapped, value, summary, bad_flags) = switch_mate_flags(checked);
-
-                println!(
-                    "{}",
-                    "After switching mate-related flags:".bold().blue()
-                );
-                println!(
-                    "{} {} {}",
-                    "Flag value:".bold(),
-                    value.to_string().bright_cyan(),
-                    format!("(0x{:03x})", value).bright_black()
-                );
-
-                if summary.is_empty() {
-                    println!("{}", "No flags are set.".dimmed());
-                } else {
-                    println!("{}", "Set flags:".bold());
-                    for f in &summary {
-                        println!(
-                            "  - {} {}: {}",
-                            format!("{:>3}", f.bitmask).bright_cyan(),
-                            format!("(0x{:03x})", f.bitmask).bright_black(),
-                            f.name
-                        );
-                    }
-                }
-
-                if !bad_flags.is_empty() {
-                    println!();
-                    println!(
-                        "{}{}",
-                        "Warning".bold().yellow().underline(),
-                        ": The following flags are invalid when the read is not paired:"
-                            .yellow()
-                            .bold()
-                    );
-                    for f in &bad_flags {
-                        println!(
-                            "  - {} {}: {}",
-                            format!("{:>3}", f.bitmask).red(),
-                            format!("(0x{:03x})", f.bitmask).bright_black(),
-                            f.name.red()
-                        );
-                    }
-                }
+                let (_swapped, value, _summary, _bad_flags) = switch_mate_flags(checked);
+                let _ = write_blue_bold(&mut stdout, "After switching mate-related flags:");
+                let _ = writeln!(stdout);
+                print_single_read_explanation(value, &mut stdout);
             }
             Err(err) => {
-                eprintln!("{}", err.red());
+                let _ = write_red(&mut stderr, &err);
+                let _ = writeln!(stderr);
+                let _ = stderr.flush();
                 std::process::exit(1);
             }
         },
@@ -890,8 +1004,10 @@ fn main() {
             // or even both; in all cases, treat `--full` as enabled if it
             // appears at least once.
             let effective_full = cli.full || select_full;
-            if let Err(err) = run_interactive(effective_full) {
-                eprintln!("{}", format!("Interactive mode failed: {err}").red());
+            if let Err(err) = run_interactive(effective_full, &mut stdout) {
+                let _ = write_red(&mut stderr, &format!("Interactive mode failed: {err}"));
+                let _ = writeln!(stderr);
+                let _ = stderr.flush();
                 std::process::exit(1);
             }
         }
@@ -900,17 +1016,19 @@ fn main() {
             // listing: when set in either place, also show the bitmask
             // alongside the decimal value.
             let effective_full = cli.full || common_full;
-            print_common_flags(effective_full);
+            print_common_flags(effective_full, &mut stdout);
         }
         (None, Some(Command::Evaluate { flags })) => {
             for (i, raw) in flags.iter().enumerate() {
                 if i > 0 {
-                    println!();
+                    writeln!(stdout).unwrap();
                 }
                 match parse_flag_value(raw) {
-                    Ok(value) => print_explanation(value, cli.full),
+                    Ok(value) => print_explanation(value, cli.full, &mut stdout),
                     Err(err) => {
-                        eprintln!("{}", err.to_string().red());
+                        let _ = write_red(&mut stderr, &err);
+                        let _ = writeln!(stderr);
+                        let _ = stderr.flush();
                         std::process::exit(1);
                     }
                 }
@@ -918,53 +1036,60 @@ fn main() {
         }
         (None, Some(Command::Diff { flags })) => {
             if flags.len() != 2 {
-                eprintln!(
-                    "{}",
-                    format!(
+                let _ = write_red(
+                    &mut stderr,
+                    &format!(
                         "The 'diff' subcommand expects exactly 2 flag values, but got {}.",
                         flags.len()
-                    )
-                    .red()
+                    ),
                 );
-                eprintln!(
-                    "{}",
-                    "Usage: flagsamurai diff <FIRST> <SECOND>".yellow()
-                );
+                let _ = writeln!(stderr);
+                let _ = write_yellow(&mut stderr, "Usage: flagsamurai diff <FIRST> <SECOND>");
+                let _ = writeln!(stderr);
+                let _ = stderr.flush();
                 std::process::exit(1);
             }
 
             let first_value = match parse_flag_value(&flags[0]) {
                 Ok(v) => v,
                 Err(err) => {
-                    eprintln!("{}", err.to_string().red());
+                    let _ = write_red(&mut stderr, &err);
+                    let _ = writeln!(stderr);
+                    let _ = stderr.flush();
                     std::process::exit(1);
                 }
             };
             let second_value = match parse_flag_value(&flags[1]) {
                 Ok(v) => v,
                 Err(err) => {
-                    eprintln!("{}", err.to_string().red());
+                    let _ = write_red(&mut stderr, &err);
+                    let _ = writeln!(stderr);
+                    let _ = stderr.flush();
                     std::process::exit(1);
                 }
             };
-            print_diff(first_value, second_value);
+            print_diff(first_value, second_value, &mut stdout);
         }
 
         // No args at all: print a short usage hint.
         (None, None) => {
-            eprintln!(
-                "{}",
-                "Usage: flagsamurai <FLAG> | flagsamurai <SUBCOMMAND> [FLAGS...]".yellow()
+            let _ = write_yellow(
+                &mut stderr,
+                "Usage: flagsamurai <FLAG> | flagsamurai <SUBCOMMAND> [FLAGS...]",
             );
+            let _ = writeln!(stderr);
+            let _ = stderr.flush();
             std::process::exit(1);
         }
 
         // Both top-level flag and subcommand present: treat as misuse.
         (Some(_), Some(_)) => {
-            eprintln!(
-                "{}",
-                "Provide either a FLAG value or a subcommand, not both.".red()
+            let _ = write_red(
+                &mut stderr,
+                "Provide either a FLAG value or a subcommand, not both.",
             );
+            let _ = writeln!(stderr);
+            let _ = stderr.flush();
             std::process::exit(1);
         }
     }
