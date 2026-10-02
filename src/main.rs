@@ -1,3 +1,41 @@
+//! # FlagSamurai
+//!
+//! A command-line tool for inspecting and manipulating SAM-style bit flags
+//! (as used in SAM/BAM/CRAM alignment formats).
+//!
+//! ## Features
+//!
+//! - **Explain** — Decode one or more numeric flag values into human-readable flag names and descriptions.
+//! - **Compute** — Build a flag value from individual boolean flags (e.g. `--read-paired --read-reverse`).
+//! - **Switch** — Swap mate-related bits and show the resulting value and explanation.
+//! - **Select** — Interactive TUI to pick flags and see the resulting value.
+//! - **Common** — List common SAM flag combinations and their meanings.
+//! - **Evaluate** — Explain multiple flag values in one run.
+//! - **Diff** — Compare two flag values (flags only in first, only in second, or in both).
+//! - **Samtools** — Output in `samtools flags` style (hex, decimal, comma-separated flag names).
+//!
+//! Input can be decimal, hexadecimal (`0x63`), or octal (`0o143`). Output can be forced to hex
+//! (`-x`/`--hex`), decimal (`-d`/`--dec`), or octal (`-o`/`--oct`).
+//!
+//! ## Examples
+//!
+//! ```bash
+//! # Explain a single flag value (default)
+//! flagsamurai 99
+//! flagsamurai explain 99
+//!
+//! # Compare two values
+//! flagsamurai diff 99 29
+//!
+//! # Output in samtools flags style
+//! flagsamurai samtools 99 0x63
+//!
+//! # Suppress warnings and disable colour for script-friendly output
+//! flagsamurai --suppress-warnings --color=never 99
+//! ```
+//!
+//! See the README for installation and more usage.
+
 use clap::{Args, Parser, Subcommand};
 use crossterm::{
     cursor,

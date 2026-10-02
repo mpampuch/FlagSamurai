@@ -2,6 +2,11 @@
 name = "flagsamurai"
 version = "0.1.0"
 edition = "2024"
+description = "Inspect and manipulate SAM-style bit flags (SAM/BAM/CRAM)"
+readme = "README.md"
+license = "MIT"
+keywords = ["sam", "bam", "cram", "flags", "bioinformatics", "cli"]
+categories = ["command-line-utilities", "science::bioinformatics"]
 
 # Two binaries from the same source: full name and short alias.
 [[bin]]

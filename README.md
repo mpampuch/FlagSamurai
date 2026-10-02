@@ -32,3 +32,13 @@ Examples below use `flagsamurai`; you can substitute `flagsam`.
 - Common combinations: `flagsamurai common`
 
 Run `flagsamurai --help` (or `flagsam --help`) for options and subcommands.
+
+## Documentation
+
+Crate documentation is generated from doc comments. Build and open it with:
+
+```bash
+cargo doc --open
+```
+
+This documents the binary crate (private items are not shown by default; use `--document-private-items` to include them).
