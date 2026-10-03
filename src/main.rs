@@ -41,8 +41,7 @@ use crossterm::{
     cursor,
     event::{self, Event, KeyCode},
     execute,
-    style::{Attribute, Color, Print, SetAttribute, SetForegroundColor},
-    terminal::{self, Clear, ClearType},
+    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::io::{self, Write};
 use termcolor::{Color as TermColor, ColorChoice, ColorSpec, StandardStream, WriteColor};
@@ -204,6 +203,21 @@ fn write_with_color(
     let mut spec = ColorSpec::new();
     spec.set_fg(Some(color)).set_intense(intense);
     write_style(w, &spec, s)
+}
+
+/// Colour one checklist field. The current row is also bold so the cursor
+/// stays visible without reverse video, which termcolor resets before the
+/// text is drawn. `--color=never` still strips the colour.
+fn write_select_field(
+    w: &mut dyn WriteColor,
+    mut spec: ColorSpec,
+    current: bool,
+    text: &str,
+) -> io::Result<()> {
+    if current {
+        spec.set_bold(true);
+    }
+    write_style(w, &spec, text)
 }
 
 /// Palette for samtools flag names (12 distinct colors, one per flag).
@@ -1042,6 +1056,43 @@ fn print_common_flags(with_bitmasks: bool, out: &mut StandardStream) {
     let _ = out.flush();
 }
 
+/// Puts the checklist on the alternate screen and puts the terminal back on drop.
+///
+/// Clearing the main screen scrolls the previous frame into scrollback. The
+/// alternate screen is a separate buffer, so redraws replace the checklist
+/// instead of pushing it up. Drop uses the process stdout because this guard
+/// cannot hold `out` while the draw loop borrows it; the normal exit path
+/// restores through `out` first and disarms the guard.
+struct InteractiveTerminalGuard {
+    active: bool,
+}
+
+impl InteractiveTerminalGuard {
+    fn restore(&mut self, out: &mut StandardStream) -> io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        execute!(out, cursor::Show, LeaveAlternateScreen)?;
+        terminal::disable_raw_mode()?;
+        out.flush()?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for InteractiveTerminalGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, cursor::Show, LeaveAlternateScreen);
+        let _ = terminal::disable_raw_mode();
+        let _ = stdout.flush();
+    }
+}
+
 /// Simple interactive checklist UI for selecting flags.
 ///
 /// - Arrow Up/Down: move selection
@@ -1053,22 +1104,24 @@ fn run_interactive(
     out: &mut StandardStream,
     suppress_warnings: bool,
 ) -> io::Result<Option<u16>> {
+    execute!(out, EnterAlternateScreen, cursor::Hide)?;
+    let mut guard = InteractiveTerminalGuard { active: true };
     terminal::enable_raw_mode()?;
-
-    execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
 
     let mut selected: Vec<bool> = vec![false; FLAGS.len()];
     let mut index: usize = 0;
 
-    loop {
-        // Redraw screen
-        execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+    let accepted = loop {
+        // Redraw from the top of the alternate screen. Move home before
+        // clearing so the erase covers the previous frame in place.
+        execute!(out, cursor::MoveTo(0, 0), Clear(ClearType::FromCursorDown))?;
         write_bold(
             out,
             "Interactive flag selection (↑/↓ to move, space to toggle, Enter to accept, q to quit)",
         )?;
-        writeln!(out)?;
-        writeln!(out)?;
+        // Raw mode does not turn `\n` into a carriage return, so a plain
+        // writeln would leave the cursor in the middle of the next row.
+        write!(out, "\r\n\r\n")?;
 
         // Each flag rendered on its own fixed row starting at row 2 so that
         // the list stays left-aligned regardless of wrapping.
@@ -1076,25 +1129,35 @@ fn run_interactive(
             let row = 2 + i as u16;
             execute!(out, cursor::MoveTo(0, row), Clear(ClearType::CurrentLine))?;
 
-            let marker = if selected[i] { "[x]" } else { "[ ]" };
-            let cursor_char = if i == index { ">" } else { " " };
-            let line = format!(
-                "{cursor_char} {} {:>3}  {}",
-                marker, flag.bitmask, flag.name
-            );
-
-            if i == index {
-                execute!(
-                    out,
-                    SetAttribute(Attribute::Reverse),
-                    SetForegroundColor(Color::Cyan),
-                    Print(&line),
-                    SetAttribute(Attribute::Reset),
-                    SetForegroundColor(Color::Reset)
-                )?;
+            let current = i == index;
+            if current {
+                write_bold(out, ">")?;
             } else {
-                write!(out, "{line}")?;
+                write!(out, " ")?;
             }
+            write!(out, " ")?;
+
+            // Green when checked, dimmed when not — same green/dimmed used elsewhere.
+            let marker = if selected[i] { "[x]" } else { "[ ]" };
+            let mut marker_spec = ColorSpec::new();
+            if selected[i] {
+                marker_spec.set_fg(Some(TermColor::Green));
+            } else {
+                marker_spec.set_dimmed(true);
+            }
+            write_select_field(out, marker_spec, current, marker)?;
+            write!(out, " ")?;
+
+            // Decimal bitmasks are bright cyan in explain and samtools output.
+            let mut bitmask_spec = ColorSpec::new();
+            bitmask_spec.set_fg(Some(TermColor::Cyan)).set_intense(true);
+            write_select_field(out, bitmask_spec, current, &format!("{:>3}", flag.bitmask))?;
+            write!(out, "  ")?;
+
+            let (color, intense) = SAMTOOLS_FLAG_COLORS[i];
+            let mut name_spec = ColorSpec::new();
+            name_spec.set_fg(Some(color)).set_intense(intense);
+            write_select_field(out, name_spec, current, flag.name)?;
         }
 
         out.flush()?;
@@ -1102,11 +1165,7 @@ fn run_interactive(
         // Handle input
         if let Event::Key(key) = event::read()? {
             match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
-                    terminal::disable_raw_mode()?;
-                    // User cancelled
-                    return Ok(None);
-                }
+                KeyCode::Char('q') | KeyCode::Esc => break None,
                 KeyCode::Up => {
                     if index == 0 {
                         index = FLAGS.len() - 1;
@@ -1120,17 +1179,20 @@ fn run_interactive(
                 KeyCode::Char(' ') => {
                     selected[index] = !selected[index];
                 }
-                KeyCode::Enter => {
-                    let value = compute_flag_value(&selected);
-                    // Clear the interactive UI, then leave raw mode and print on a clean screen.
-                    execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
-                    terminal::disable_raw_mode()?;
-                    print_explanation(value, full, out, suppress_warnings);
-                    return Ok(Some(value));
-                }
+                KeyCode::Enter => break Some(compute_flag_value(&selected)),
                 _ => {}
             }
         }
+    };
+
+    // Leave the alternate screen before printing, or the explanation would
+    // vanish with the checklist when the main screen is restored.
+    guard.restore(out)?;
+    if let Some(value) = accepted {
+        print_explanation(value, full, out, suppress_warnings);
+        Ok(Some(value))
+    } else {
+        Ok(None)
     }
 }
 

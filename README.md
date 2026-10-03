@@ -2,6 +2,12 @@
 
 A command-line tool for decoding SAM-style bit flags.
 
+## Rationale
+
+I made this because I found errors when working with `samtools flags` (e.g. `samtools flags 0xFFF` should be the maximum allowable value (flag 4095 set, corresponding to all flags), but all values up to `samtools flags 0xFFFF` will produce a result. The [docs](https://www.htslib.org/doc/samtools-flags.html) also mention supporting octal notation but it does not work).
+
+Additionally, I made it as comprehensive as possible to be able to analyze SAM flags and learn about them all inside the terminal.
+
 ## Installation
 
 From the project directory:
