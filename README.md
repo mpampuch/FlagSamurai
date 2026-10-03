@@ -8,6 +8,21 @@ I made this because I found errors when working with `samtools flags` (e.g. `sam
 
 Additionally, I made it as comprehensive as possible to be able to analyze SAM flags and learn about them all inside the terminal.
 
+| Bit     | Flag                                                    |
+| ------- | ------------------------------------------------------- |
+| `0x1`   | <font color="#008800">read paired</font>                |
+| `0x2`   | <font color="#a67c00">read mapped in proper pair</font> |
+| `0x4`   | <font color="#2244cc">read unmapped</font>              |
+| `0x8`   | <font color="#aa00aa">mate unmapped</font>              |
+| `0x10`  | <font color="#cc0000">read reverse strand</font>        |
+| `0x20`  | <font color="#008888">mate reverse strand</font>        |
+| `0x40`  | <font color="#00aa00">first in pair</font>              |
+| `0x80`  | <font color="#c49212">second in pair</font>             |
+| `0x100` | <font color="#5555ee">not primary alignment</font>      |
+| `0x200` | <font color="#cc44cc">fails quality checks</font>       |
+| `0x400` | <font color="#ee4444">PCR/optical duplicate</font>      |
+| `0x800` | <font color="#00aaaa">supplementary alignment</font>    |
+
 ## Installation
 
 ### Quick Install
@@ -44,15 +59,6 @@ Examples below use `flagsamurai`; you can substitute `flagsam`.
 - Compare two values: `flagsamurai diff 99 29`
 - Interactive selection: `flagsamurai select`
 - Common combinations: `flagsamurai common`
+- Plain output for scripts: `flagsamurai --suppress-warnings --color never 99`
 
 Run `flagsamurai --help` (or `flagsam --help`) for options and subcommands.
-
-## Documentation
-
-Crate documentation is generated from doc comments. Build and open it with:
-
-```bash
-cargo doc --open
-```
-
-This documents the binary crate (private items are not shown by default; use `--document-private-items` to include them).

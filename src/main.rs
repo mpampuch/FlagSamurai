@@ -17,6 +17,36 @@
 //! Input can be decimal, hexadecimal (`0x63`), or octal (`0o143`). Output can be forced to hex
 //! (`-x`/`--hex`), decimal (`-d`/`--dec`), or octal (`-o`/`--oct`).
 //!
+//! ## Colour
+//!
+//! Terminal output is coloured when stdout is a TTY. Control it with `-c` / `--color`
+//! (or `--colour`):
+//!
+//! - `auto` — colour only when writing to a terminal (the default)
+//! - `always` — always emit colour
+//! - `never` — plain text, for scripts and pipes
+//!
+//! Hide warnings (invalid flags on an unpaired read, and format hints from `-x`/`-d`/`-o`)
+//! with `-w` / `--suppress-warnings`.
+//!
+//! Each flag name uses a distinct colour, in flag-bit order. Brighter names are the intense
+//! variant of the same hue:
+//!
+//! | Bit | Flag |
+//! | --- | --- |
+//! | `0x1` | <font color="#008800">read paired</font> |
+//! | `0x2` | <font color="#a67c00">read mapped in proper pair</font> |
+//! | `0x4` | <font color="#2244cc">read unmapped</font> |
+//! | `0x8` | <font color="#aa00aa">mate unmapped</font> |
+//! | `0x10` | <font color="#cc0000">read reverse strand</font> |
+//! | `0x20` | <font color="#008888">mate reverse strand</font> |
+//! | `0x40` | <font color="#00aa00">first in pair</font> |
+//! | `0x80` | <font color="#c49212">second in pair</font> |
+//! | `0x100` | <font color="#5555ee">not primary alignment</font> |
+//! | `0x200` | <font color="#cc44cc">fails quality checks</font> |
+//! | `0x400` | <font color="#ee4444">PCR/optical duplicate</font> |
+//! | `0x800` | <font color="#00aaaa">supplementary alignment</font> |
+//!
 //! ## Examples
 //!
 //! ```bash
@@ -31,12 +61,13 @@
 //! flagsamurai samtools 99 0x63
 //!
 //! # Suppress warnings and disable colour for script-friendly output
+//! flagsamurai -w -c never 99
 //! flagsamurai --suppress-warnings --color=never 99
 //! ```
 //!
 //! See the README for installation and more usage.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode},
@@ -64,10 +95,46 @@ impl std::str::FromStr for ColorWhen {
             false if s.eq_ignore_ascii_case("auto") => Ok(ColorWhen::Auto),
             false if s.eq_ignore_ascii_case("never") => Ok(ColorWhen::Never),
             _ => Err(format!(
-                "invalid value '{s}' for '--color <WHEN>'\n  [possible values: always, auto, never]"
+                "invalid value '{s}' for '-c/--color <WHEN>'\n  [possible values: always, auto, never]"
             )),
         }
     }
+}
+
+/// Filename of the binary that was invoked, used in usage text.
+///
+/// A full path is reduced to its last component so `flagsam` and
+/// `flagsamurai` each print their own name. Missing argv falls back to
+/// the full name.
+fn bin_name_from_argv0(argv0: Option<&std::ffi::OsStr>) -> String {
+    argv0
+        .and_then(|arg| std::path::Path::new(arg).file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "flagsamurai".to_string())
+}
+
+fn invoked_bin_name() -> String {
+    bin_name_from_argv0(std::env::args_os().next().as_deref())
+}
+
+fn no_args_usage(bin: &str) -> String {
+    format!("Usage: {bin} [OPTIONS] [FLAG]... [COMMAND]\nUse -h or --help for help")
+}
+
+fn diff_usage(bin: &str) -> String {
+    format!("Usage: {bin} diff <FIRST> <SECOND>")
+}
+
+/// Parse argv after overriding clap's display name.
+///
+/// The derive `name` is the package name (`flagsamurai`) for both binaries.
+/// `set_bin_name` makes `-h` follow whichever executable was actually run.
+fn parse_cli(bin: &str) -> Cli {
+    let mut cmd = Cli::command();
+    cmd.set_bin_name(bin);
+    let matches = cmd.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit())
 }
 
 fn color_choice(when: ColorWhen) -> ColorChoice {
@@ -207,7 +274,7 @@ fn write_with_color(
 
 /// Colour one checklist field. The current row is also bold so the cursor
 /// stays visible without reverse video, which termcolor resets before the
-/// text is drawn. `--color=never` still strips the colour.
+/// text is drawn. `-c never` / `--color=never` still strips the colour.
 fn write_select_field(
     w: &mut dyn WriteColor,
     mut spec: ColorSpec,
@@ -221,6 +288,9 @@ fn write_select_field(
 }
 
 /// Palette for samtools flag names (12 distinct colors, one per flag).
+///
+/// The crate docs and README show the same hues, in this order. Update those
+/// tables if this palette changes.
 const SAMTOOLS_FLAG_COLORS: [(TermColor, bool); 12] = [
     (TermColor::Green, false),
     (TermColor::Yellow, false),
@@ -419,8 +489,9 @@ fn switch_mate_flags(
     subcommand_precedence_over_arg = true
 )]
 struct Cli {
-    /// When to use terminal colours (always, auto, never).
+    /// When to colour terminal output: `always`, `auto` (when stdout is a terminal), or `never`.
     #[arg(
+        short = 'c',
         long = "color",
         alias = "colour",
         value_name = "WHEN",
@@ -434,7 +505,8 @@ struct Cli {
     full: bool,
 
     /// Do not output any warnings (e.g. invalid-when-unpaired, or format hints for -x/-d/-o).
-    #[arg(long = "suppress-warnings", global = true)]
+    // `-w` rather than `-s`: the switch suppresses warnings, and `-s` is easier to misread.
+    #[arg(short = 'w', long = "suppress-warnings", global = true)]
     suppress_warnings: bool,
 
     /// Treat the input as a decimal or octal value and print the corresponding hexadecimal.
@@ -535,7 +607,7 @@ enum Command {
     /// 0x400  1024  DUP            PCR or optical duplicate
     /// 0x800  2048  SUPPLEMENTARY  supplementary alignment
     ///
-    /// Full output parity with `samtools flags` can be achieved by running this subcommand with `--suppress-warnings` and `--color=never` (or `--colour=never`).
+    /// Full output parity with `samtools flags` can be achieved by running this subcommand with `-w`/`--suppress-warnings` and `-c never`/`--color=never` (or `--colour=never`).
     ///
     /// This command also implements bounds-checking and proper octal notation support, which as of samtools version 1.16.1, the `samtools flags` subcommand does not.
     #[command(verbatim_doc_comment)]
@@ -1197,7 +1269,8 @@ fn run_interactive(
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let bin = invoked_bin_name();
+    let cli = parse_cli(&bin);
     let choice = color_choice(cli.color);
     let mut stdout = StandardStream::stdout(choice);
     let mut stderr = StandardStream::stderr(choice);
@@ -1445,7 +1518,7 @@ fn main() {
                     ),
                 );
                 let _ = writeln!(stderr);
-                let _ = write_yellow(&mut stderr, "Usage: flagsamurai diff <FIRST> <SECOND>");
+                let _ = write_yellow(&mut stderr, &diff_usage(&bin));
                 let _ = writeln!(stderr);
                 let _ = stderr.flush();
                 std::process::exit(1);
@@ -1479,10 +1552,7 @@ fn main() {
 
         // No args at all: print a short usage hint.
         (None, None) => {
-            let _ = write_yellow(
-                &mut stderr,
-                "Usage: flagsamurai <FLAG> | flagsamurai <SUBCOMMAND> [FLAGS...]",
-            );
+            let _ = write_yellow(&mut stderr, &no_args_usage(&bin));
             let _ = writeln!(stderr);
             let _ = stderr.flush();
             std::process::exit(1);
@@ -1526,8 +1596,9 @@ mod tests {
         let value = compute_flag_value(&checked);
         let (summary, bad_flags) = explain_flags(value);
 
-        // We set 7 paired-related flags, all valid because the read is paired.
-        assert_eq!(summary.len(), 6);
+        // Five flags are set, and all are valid because the read is paired:
+        // read paired, proper pair, mate unmapped, mate reverse, first in pair.
+        assert_eq!(summary.len(), 5);
         assert!(bad_flags.is_empty());
     }
 
@@ -1560,5 +1631,98 @@ mod tests {
         assert_eq!(value & 0x8, 0x8);
         assert_eq!(value & 0x20, 0x20);
         assert_eq!(value & 0x80, 0x80);
+    }
+
+    #[test]
+    fn bin_name_uses_invoked_filename() {
+        use std::ffi::OsStr;
+
+        assert_eq!(bin_name_from_argv0(Some(OsStr::new("flagsam"))), "flagsam");
+        assert_eq!(
+            bin_name_from_argv0(Some(OsStr::new("/usr/local/bin/flagsamurai"))),
+            "flagsamurai"
+        );
+        assert_eq!(bin_name_from_argv0(None), "flagsamurai");
+    }
+
+    #[test]
+    fn help_usage_uses_invoked_name() {
+        use clap::CommandFactory;
+
+        let mut cmd = Cli::command();
+        cmd.set_bin_name("flagsam");
+        let help = cmd.render_help().to_string();
+        assert!(
+            help.contains("Usage: flagsam [OPTIONS] [FLAG]... [COMMAND]"),
+            "help was:\n{help}"
+        );
+    }
+
+    #[test]
+    fn no_args_usage_names_the_invoked_binary() {
+        assert_eq!(
+            no_args_usage("flagsam"),
+            "Usage: flagsam [OPTIONS] [FLAG]... [COMMAND]\nUse -h or --help for help"
+        );
+    }
+
+    #[test]
+    fn diff_usage_names_the_invoked_binary() {
+        assert_eq!(
+            diff_usage("flagsam"),
+            "Usage: flagsam diff <FIRST> <SECOND>"
+        );
+    }
+
+    #[test]
+    fn short_color_and_suppress_warnings_flags() {
+        let cli = Cli::try_parse_from(["flagsamurai", "-c", "never", "-w", "99"]).unwrap();
+        assert_eq!(cli.color, ColorWhen::Never);
+        assert!(cli.suppress_warnings);
+        assert_eq!(cli.flag.as_deref(), Some(["99".to_string()].as_slice()));
+    }
+
+    #[test]
+    fn long_color_and_colour_alias_still_parse() {
+        let color = Cli::try_parse_from(["flagsamurai", "--color=always", "1"]).unwrap();
+        assert_eq!(color.color, ColorWhen::Always);
+        assert!(!color.suppress_warnings);
+
+        let colour = Cli::try_parse_from([
+            "flagsamurai",
+            "--colour",
+            "never",
+            "--suppress-warnings",
+            "1",
+        ])
+        .unwrap();
+        assert_eq!(colour.color, ColorWhen::Never);
+        assert!(colour.suppress_warnings);
+    }
+
+    #[test]
+    fn short_flags_apply_after_a_subcommand() {
+        let cli =
+            Cli::try_parse_from(["flagsamurai", "explain", "-w", "-c", "always", "99"]).unwrap();
+        assert_eq!(cli.color, ColorWhen::Always);
+        assert!(cli.suppress_warnings);
+        match cli.command {
+            Some(Command::Explain { flags }) => assert_eq!(flags, vec!["99".to_string()]),
+            other => panic!("expected explain, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn help_lists_short_color_and_suppress_warnings() {
+        let mut cmd = Cli::command();
+        cmd.set_bin_name("flagsamurai");
+        let help = cmd.render_help().to_string();
+        // Match the short flag itself. `-c` is a substring of `--color`, and
+        // `-w` is a substring of `--suppress-warnings`.
+        assert!(help.contains("-c, --color"), "help was:\n{help}");
+        assert!(
+            help.contains("-w, --suppress-warnings"),
+            "help was:\n{help}"
+        );
     }
 }
