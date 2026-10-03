@@ -5,8 +5,10 @@ edition = "2024"
 description = "Inspect and manipulate SAM-style bit flags (SAM/BAM/CRAM)"
 readme = "README.md"
 license = "MIT"
-keywords = ["sam", "bam", "cram", "flags", "bioinformatics", "cli"]
+keywords = ["sam", "bam", "cram", "flags", "bioinformatics"]
 categories = ["command-line-utilities", "science::bioinformatics"]
+repository = "https://github.com/mpampuch/FlagSamurai"
+
 
 # Two binaries from the same source: full name and short alias.
 [[bin]]

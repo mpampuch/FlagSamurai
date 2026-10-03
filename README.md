@@ -10,7 +10,15 @@ Additionally, I made it as comprehensive as possible to be able to analyze SAM f
 
 ## Installation
 
-From the project directory:
+### Quick Install
+
+```bash
+cargo install flagsamurai
+```
+
+### Compile locally
+
+Clone the repo and then from the project directory:
 
 ```bash
 cargo install --path .
